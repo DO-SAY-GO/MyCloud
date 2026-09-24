@@ -49,17 +49,17 @@ test('reserve: an overwrite that would cross the floor fails end to end and keep
 });
 
 // ---- 2. Metadata writes go through the gate ------------------------------------------------------------------------
-test('metadata: PROPPATCH is held to the quota (probe: ~40 KB with 1,024 bytes left)', async () => {
+test('metadata: collections count toward the quota; their properties are capped bookkeeping', async () => {
   const s = await setup({ headroom: 1024 });
   try {
-    const propsFile = path.join(s.dir, 'users/q/calendars/personal/.props.json');
-    const before = await fs.readFile(propsFile, 'utf8');
-    const body = `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:z"><d:set><d:prop><z:big>${'x'.repeat(40 * 1024)}</z:big></d:prop></d:set></d:propertyupdate>`;
-    assert.equal((await s.dav('PROPPATCH', '/dav/calendars/q/personal/', body)).status, 507);
-    assert.equal(await fs.readFile(propsFile, 'utf8'), before);
-    // A normal rename still works.
-    const rename = `<d:propertyupdate xmlns:d="DAV:"><d:set><d:prop><d:displayname>Home</d:displayname></d:prop></d:set></d:propertyupdate>`;
-    assert.equal((await s.dav('PROPPATCH', '/dav/calendars/q/personal/', rename)).status, 207);
+    // A new calendar is a user entry (a 4 KB block): no room for it.
+    const mk = await s.dav('MKCALENDAR', '/dav/calendars/q/extra/', '<c:mkcalendar xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"/>');
+    assert.equal(mk.status, 507);
+    // Properties of an existing collection are server bookkeeping: not the user's quota, but capped at 64 KB
+    // (and reserved against the disk floor, see audit5).
+    const body = (n) => `<d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:z"><d:set><d:prop><z:${n}>${'x'.repeat(40 * 1024)}</z:${n}></d:prop></d:set></d:propertyupdate>`;
+    assert.equal((await s.dav('PROPPATCH', '/dav/calendars/q/personal/', body('a'))).status, 207);
+    assert.equal((await s.dav('PROPPATCH', '/dav/calendars/q/personal/', body('b'))).status, 413);
   } finally {
     await s.close();
   }

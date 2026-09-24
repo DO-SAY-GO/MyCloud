@@ -33,14 +33,14 @@ export async function setup({ headroom = Infinity, familyHeadroom = Infinity, re
     const s = await fs.statfs(dir);
     env.MYCLOUD_DISK_RESERVE_GB = String((s.bavail * s.bsize - reserveBelowFree) / GB);
   }
-  const { server } = await createServer({ dataDir: dir, log: quiet, env });
+  const { server, limits } = await createServer({ dataDir: dir, log: quiet, env });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'q', password: 'q-password-12' }) });
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const auth = 'Basic ' + Buffer.from(`q:${app}`).toString('base64');
   return {
-    dir, store, base,
+    dir, store, base, limits,
     api: (method, p, body, headers = {}) => fetch(`${base}/api${p}`, { method, headers: { 'X-MyCloud': '1', cookie, ...headers }, body, duplex: 'half' }),
     dav: (method, p, body, headers = {}) => fetch(`${base}${p}`, { method, headers: { Authorization: auth, ...headers }, body, duplex: 'half' }),
     userBytes: () => bytesUnder(store.userRoot('q'), store.cacheRoot('q')),
