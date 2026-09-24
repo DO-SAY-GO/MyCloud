@@ -16,7 +16,24 @@ export async function bytesUnder(dir, skip) {
 }
 
 // A server where user "q" (the admin) has `headroom` bytes of quota left, and Family `familyHeadroom`.
-export async function setup({ headroom = Infinity, familyHeadroom = Infinity, reserveBelowFree, env: extraEnv = {} } = {}) {
+// A virtual disk for reserve tests: free space starts `aboveFloor` bytes above a 1 GB reserve and shrinks by exactly
+// what is written into the data folder, so the tests are deterministic however busy the real disk is.
+async function du(dir) {
+  let bytes = 0;
+  let entries = 0;
+  for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    const p = path.join(dir, e.name);
+    entries++;
+    if (e.isDirectory()) {
+      const sub = await du(p);
+      bytes += sub.bytes;
+      entries += sub.entries;
+    } else if (e.isFile()) bytes += (await fs.stat(p).catch(() => ({ size: 0 }))).size;
+  }
+  return { bytes, entries };
+}
+
+export async function setup({ headroom = Infinity, familyHeadroom = Infinity, diskAboveFloor, inodesAboveFloor = 1e9, env: extraEnv = {} } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mycloud-audit3-'));
   const a = new Auth(dir);
   await a.load();
@@ -29,23 +46,35 @@ export async function setup({ headroom = Infinity, familyHeadroom = Infinity, re
   const env = { MYCLOUD_THUMBNAILS: 'off', ...extraEnv };
   if (headroom !== Infinity) env.MYCLOUD_QUOTA_GB = String((userBase + headroom) / GB);
   if (familyHeadroom !== Infinity) env.MYCLOUD_FAMILY_QUOTA_GB = String((familyBase + familyHeadroom) / GB);
-  if (reserveBelowFree !== undefined) {
-    const s = await fs.statfs(dir);
-    env.MYCLOUD_DISK_RESERVE_GB = String((s.bavail * s.bsize - reserveBelowFree) / GB);
+  let statfs;
+  if (diskAboveFloor !== undefined) {
+    env.MYCLOUD_DISK_RESERVE_GB = '1';
+    env.MYCLOUD_INODE_RESERVE = '100';
+    const start = await du(dir);
+    statfs = async () => {
+      const now = await du(dir);
+      return { bavail: Math.floor((GB + diskAboveFloor - (now.bytes - start.bytes)) / 4096), bsize: 4096, ffree: 100 + inodesAboveFloor - (now.entries - start.entries) };
+    };
   }
-  const { server, limits } = await createServer({ dataDir: dir, log: quiet, env });
+  const { server, limits, dav, activity } = await createServer({ dataDir: dir, log: quiet, env, statfs });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'q', password: 'q-password-12' }) });
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const auth = 'Basic ' + Buffer.from(`q:${app}`).toString('base64');
   return {
-    dir, store, base, limits,
+    dir, store, base, limits, dav_: dav,
     api: (method, p, body, headers = {}) => fetch(`${base}/api${p}`, { method, headers: { 'X-MyCloud': '1', cookie, ...headers }, body, duplex: 'half' }),
     dav: (method, p, body, headers = {}) => fetch(`${base}${p}`, { method, headers: { Authorization: auth, ...headers }, body, duplex: 'half' }),
     userBytes: () => bytesUnder(store.userRoot('q'), store.cacheRoot('q')),
     userBase,
-    close: async () => { server.close(); await fs.rm(dir, { recursive: true, force: true }); },
+    // Wait for the server to stop and its activity log to flush before removing the folder.
+    close: async () => {
+      await new Promise((r) => server.close(r));
+      server.closeAllConnections?.();
+      await activity.chain;
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    },
   };
 }
 

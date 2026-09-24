@@ -56,9 +56,13 @@ security and every generated link from the configured URL rather than from reque
     their budget immediately, and each reservation is settled against what is really on disk at commit time, so
     cached usage always matches a recount, even under concurrent writes to the same name.
   - Calendar and contact changes are transactions: content and sync logs are reserved together and staged, then every
-    rename is applied through a durable journal (fsynced before anything changes; replaced files kept as backups until
-    the commit record is written). Any failure rolls back in reverse. After a crash, startup recovery finishes a
-    committed transaction or restores the state from before it. Imports are all or nothing, and moving an object
+    rename is applied through a durable journal. Staged files and their folders are fsynced before the "prepared"
+    record; every renamed folder is fsynced before the "committed" record; replaced files are kept as backups until
+    then. Any failure rolls back in reverse, and a rollback that can't complete **keeps the journal**; a completed
+    rollback is durably marked "aborted" before its record is deleted, and every record deletion is itself fsynced, so a
+    crash can't resurrect a stale record. At startup,
+    recovery rolls back prepared transactions and verifies committed ones, finishing any rename a power cut lost,
+    before discarding backups. A journal it still can't settle is kept, and reported, for the next start. Imports are all or nothing, and moving an object
     between calendars changes the object and both logs together.
   - Concurrent writers serialize on the destination: uploads, COPY and MOVE take a per-path lock (MOVE locks source
     and destination in a fixed order) and re-check `Overwrite` and existing content at commit time, so racing requests
@@ -78,6 +82,9 @@ security and every generated link from the configured URL rather than from reque
   - The disk reserve (`MYCLOUD_DISK_RESERVE_GB`, default 2) is a byte ledger: free space at the last measurement,
     minus bytes written since, minus bytes other operations have claimed. It's checked on every reservation and every
     streamed chunk, so even a small upload can't cross the floor. Real measurements refresh it.
+  - Copies and moves are charged for what they really copy or move: Drive copies claim each file and folder before
+    creating it and stream every byte through the meter (quota, disk and inode floors enforced during the copy), and calendar/contact copies and cross-budget moves re-measure the
+    source under its lock and re-check every floor before committing.
   - Reservations are claimed atomically, count everything in flight across protocols, bill overwrites only for the
     difference, and are released on every error path. Files are capped at `MYCLOUD_MAX_UPLOAD_GB` (default 50), and
     collection properties at 64 KB. Silent connections are dropped after two minutes; partial uploads are cleaned up.

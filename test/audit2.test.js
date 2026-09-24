@@ -43,8 +43,8 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
 });
 after(async () => {
-  server.close();
-  await fs.rm(dataDir, { recursive: true, force: true });
+  await new Promise((r) => server.close(r));
+  await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 // ---- 1. Family publishing ------------------------------------------------------------------------------------------
@@ -99,7 +99,7 @@ async function quotaServer(extraBytes) {
   const b = `http://127.0.0.1:${s.address().port}`;
   const cookie = await login('q', 'q-password-12', b);
   const put = (p, body, headers = {}) => fetch(`${b}/api/files/raw?path=${p}`, { method: 'PUT', headers: { 'X-MyCloud': '1', cookie, ...headers }, body, duplex: 'half' });
-  return { dir, s, put, close: async () => { s.close(); await fs.rm(dir, { recursive: true, force: true }); } };
+  return { dir, s, put, close: async () => { await new Promise((r) => s.close(r)); await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } };
 }
 
 const chunked = (bytes, pieces = 2, delay = 0) => new ReadableStream({
@@ -178,8 +178,8 @@ test('thumbnailer: one job at a time, and no job can see another', async () => {
     assert.deepEqual(violations, []);
     assert.deepEqual(await fs.readdir(workRoot), []);
   } finally {
-    s.close();
-    await fs.rm(workRoot, { recursive: true, force: true });
+    await new Promise((r) => s.close(r));
+    await fs.rm(workRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -193,8 +193,8 @@ test('thumbnailer: oversized inputs are refused, declared or streamed', async ()
     assert.deepEqual(await fs.readdir(workRoot), []);
   } finally {
     delete process.env.MYCLOUD_THUMBNAIL_MAX_MB;
-    s.close();
-    await fs.rm(workRoot, { recursive: true, force: true });
+    await new Promise((r) => s.close(r));
+    await fs.rm(workRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -222,7 +222,7 @@ test('thumbnailer: MyCloud accepts only a small, genuine JPEG back', async () =>
     assert.deepEqual(results.map(Boolean), [false, false, false, true]);
   } finally {
     fake.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -254,9 +254,9 @@ test('thumbnail sandbox: only the input is readable; data, other temp files and 
     const curl = ['/usr/bin/curl', '/bin/curl'].find((c) => existsSync(c));
     if (curl) assert.equal(await inside(curl, ['-sS', '-m', '5', '-o', '/dev/null', 'http://1.1.1.1/']), null);
   } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-    await fs.rm(otherTmp, { recursive: true, force: true });
-    await fs.rm(job, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await fs.rm(otherTmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await fs.rm(job, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -305,6 +305,6 @@ test('proxy trust requires a public URL', async () => {
   try {
     await assert.rejects(createServer({ dataDir: dir, trustProxy: true, log: quiet }), /--public-url/);
   } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

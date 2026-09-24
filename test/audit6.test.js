@@ -58,7 +58,7 @@ async function tight(headroomAboveFloor) {
   // What DAV does: reserve the content for the user, then write through the store.
   const put = (name, data, replacing = 0, entries = 1) => limits.withBytes('q', Buffer.byteLength(data), replacing,
     (res) => store.writeItem(coll, name, data, { settle: (x) => limits.settle(res, x) }), { entries });
-  return { dir, store, limits, coll, syncText, exact, put, setFree, close: () => fs.rm(dir, { recursive: true, force: true }) };
+  return { dir, store, limits, coll, syncText, exact, put, setFree, close: () => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) };
 }
 
 test('transaction: a create whose sync-log reservation fails leaves nothing behind', async () => {

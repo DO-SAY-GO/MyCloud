@@ -108,7 +108,7 @@ test('storage: the disk reserve holds for a small chunked stream (auditor probe:
 });
 
 test('storage: the disk reserve holds end to end, whatever the protocol', async () => {
-  const s = await setup({ reserveBelowFree: 8 * 1024 * 1024 });
+  const s = await setup({ diskAboveFloor: 8 * 1024 * 1024 });
   try {
     // The server may answer 507 mid-stream and close the connection; either way nothing may be stored.
     const r = await s.api('PUT', '/files/raw?path=Documents/big.bin', chunked(32 * 1024 * 1024, 128)).catch(() => null);
@@ -133,7 +133,7 @@ test('storage: the thumbnail cache (system budget) respects the disk reserve', a
     await limits.withBytes(SYSTEM, 64 * 1024, 0, async () => { wrote = true; });
     assert.equal(wrote, true);
   } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 

@@ -98,7 +98,7 @@ test('bookkeeping: sync-log, property and trash writes are reserved against the 
     await assert.rejects(store.trash('q', f, 'Documents/t.txt'), /out of space/);
     assert.ok(await fs.stat(f)); // nothing moved
   } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 

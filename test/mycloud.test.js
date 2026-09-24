@@ -31,8 +31,8 @@ before(async () => {
 });
 
 after(async () => {
-  server.close();
-  await fs.rm(dataDir, { recursive: true, force: true });
+  await new Promise((r) => server.close(r));
+  await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const settle = () => new Promise((r) => setTimeout(r, 2600)); // the server re-reads users.json every 2s
@@ -407,7 +407,7 @@ test('audit: behind a proxy — Secure cookies, HSTS, canonical URLs, unspoofabl
     }
     assert.equal(last.status, 429);
   } finally {
-    s2.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await new Promise((r) => s2.close(r));
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

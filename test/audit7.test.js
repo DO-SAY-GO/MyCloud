@@ -20,11 +20,15 @@ const exact = async (s) => {
 test('concurrency: 240 COPYs across 12 destinations serialize (auditor probe)', async () => {
   const s = await setup({ headroom: 50 * 1024 * 1024 });
   try {
-    for (let k = 0; k < 20; k++) await s.dav('PUT', `/dav/files/q/Documents/src${k}.bin`, new Uint8Array(1000 + k));
+    for (let k = 0; k < 20; k++) {
+      const put = await s.dav('PUT', `/dav/files/q/Documents/src${k}.bin`, new Uint8Array(1000 + k));
+      assert.equal(put.status, 201, `seeding src${k}: ${put.status} ${await put.text()}`);
+    }
     const res = await Promise.all(Array.from({ length: 240 }, (_, i) => s.dav('COPY', `/dav/files/q/Documents/src${i % 20}.bin`, null,
       { Destination: `${s.base}/dav/files/q/Documents/dst${i % 12}.bin` })));
     const statuses = res.map((r) => r.status);
-    assert.ok(statuses.every((x) => x === 201 || x === 204), `unexpected ${[...new Set(statuses)]}`);
+    const odd = await Promise.all(res.map(async (r, i) => (r.status === 201 || r.status === 204 ? null : `#${i} ${r.status} ${await r.text()}`)));
+    assert.deepEqual(odd.filter(Boolean), [], 'every COPY answers 201 or 204');
     assert.equal(statuses.filter((x) => x === 201).length, 12); // exactly one creator per destination
     // Every overwrite (204) kept its predecessor in Recently Deleted, and nothing else went there.
     const { items } = await (await s.api('GET', '/trash')).json();
@@ -101,7 +105,7 @@ async function world() {
   const work = store.collectionDir('q', 'calendars', 'work');
   await store.writeItem(personal, 'keep.ics', ics('keep'));
   await store.writeItem(personal, 'mv.ics', ics('mv'));
-  return { dir, store, personal, work, close: () => fs.rm(dir, { recursive: true, force: true }) };
+  return { dir, store, personal, work, close: () => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) };
 }
 
 const SCENARIOS = {
@@ -128,13 +132,16 @@ for (const [name, run] of Object.entries(SCENARIOS)) {
         try {
           const before = await snapshot([w.personal, w.work]);
           w.store.journal.fault = async (l) => { if (l === label) throw Object.assign(new Error(`injected at ${l}`), { crash }); };
-          await assert.rejects(run(w), /injected/);
-          if (crash) {
-            // A fresh process finds the journal and settles it.
+          const postCommit = label === 'removing'; // cleanup after the commit record: the operation has happened
+          if (postCommit) await run(w);
+          else await assert.rejects(run(w), /injected/);
+          if (crash || postCommit) {
+            // A fresh process finds any journal left behind and settles it.
             const restarted = new Store(w.dir);
-            assert.equal(await restarted.journal.recover(), 1);
+            await restarted.journal.recover();
+            assert.deepEqual(restarted.journal.stuck, []);
           }
-          const expected = crash && label === 'committed' ? after : before;
+          const expected = postCommit || (crash && label === 'committed') ? after : before;
           assert.deepEqual(await snapshot([w.personal, w.work]), expected, `${label} ${crash ? 'crash' : 'error'}`);
           assert.deepEqual(await fs.readdir(path.join(w.dir, 'journal')).catch(() => []), []);
         } finally {

@@ -32,7 +32,7 @@ test('reserve: replacing a file needs room for the whole new copy (probe: 2 MiB 
 });
 
 test('reserve: an overwrite that would cross the floor fails end to end and keeps the original', async () => {
-  const s = await setup({ reserveBelowFree: 24 * MiB });
+  const s = await setup({ diskAboveFloor: 24 * MiB });
   try {
     const original = Buffer.alloc(12 * MiB, 7);
     assert.equal((await s.dav('PUT', '/dav/files/q/Documents/big.bin', original)).status, 201);
