@@ -67,9 +67,10 @@ security and every generated link from the configured URL rather than from reque
     before discarding backups. A journal it still can't settle is kept, and reported, for the next start. Imports are all or nothing, and moving an object
     between calendars changes the object and both logs together.
   - The web app and WebDAV share one Drive path. Each budget has a readers-writer lock: changes inside a Drive
-    (upload commits, new folders, deletes, restores, copy commits, LOCK-created files) hold it shared; moving a folder
-    holds both budgets exclusively, so nothing is written beneath a folder while it is measured and moved. Uploads and
-    copies are staged in the budget's own `.staging` area, never inside user folders.
+    (upload commits, new folders, deletes, restores, copy commits, LOCK-created files) hold it shared; every move holds
+    the involved budgets exclusively, so even a source whose file/folder type changes before locking cannot weaken the
+    lock, and nothing is written beneath a folder while it is measured and moved. Uploads and copies are staged in the
+    budget's own `.staging` area, never inside user folders.
   - Concurrent writers serialize on the destination: uploads, COPY and MOVE take a per-path lock (MOVE locks source
     and destination in a fixed order) and re-check `Overwrite` and existing content at commit time, so racing requests
     get consistent 201/204/412 answers and accounting stays exact. Drive items are staged first and swapped with one
@@ -94,6 +95,8 @@ security and every generated link from the configured URL rather than from reque
   - Reservations are claimed atomically, count everything in flight across protocols, bill overwrites only for the
     difference, and are released on every error path. Files are capped at `MYCLOUD_MAX_UPLOAD_GB` (default 50), and
     collection properties at 64 KB. Silent connections are dropped after two minutes; partial uploads are cleaned up.
+    Persistent entries are charged to the owning quota separately from peak physical entries: an overwrite adds no
+    final file, but its temporary staged file still reserves an inode and one disk block before it is created.
 - **Sign-in attempts** are rationed (2 in flight per address, 4 overall) and throttled per address and per account,
   so parallel guessing is held to the same limits as sequential guessing.
 - **Thumbnails** (ImageMagick, ffmpeg) never run next to your data:
