@@ -2,6 +2,8 @@
 
 **Your own iCloud.** Drive, Photos, Notes, Calendar and Contacts, running on hardware you control. Open source. Zero dependencies.
 
+**iCloud, unbundled.** Apple's walled garden, broken back into plain folders, plain files and the open protocols it was built on all along: CalDAV, CardDAV and WebDAV. Your calendar is a folder of `.ics` files. Your contacts are `.vcf` files. Your notes are Markdown. Your photos are just your photos.
+
 MyCloud speaks the same open protocols that iCloud uses under the hood: **CalDAV**, **CardDAV** and **WebDAV**. The built-in apps on your iPhone, iPad and Mac (and Android via DAVx⁵, and Thunderbird) sync with it natively, so you don't need a special app. A clean web app covers everything else.
 
 ```
@@ -23,7 +25,7 @@ They're great, and they do far more than MyCloud does. But look at what "self-ho
 | Backup | Dump both databases, snapshot the volumes, hope they match | `rsync -a ~/.mycloud elsewhere:` |
 | Upgrading | Schema migrations, app compatibility, major-version steps | Replace the files and restart |
 | Leaving | Export tools | You already have your files |
-| Reading the code | Hundreds of thousands of lines | **~2,500 lines.** One afternoon, by you or your AI |
+| Reading the code | Hundreds of thousands of lines | **~4,000 lines**, importers included. One afternoon, by you or your AI |
 
 **The cost of self-hosting was never the server. It was the sysadmin.** Compute is getting almost free. A spare mini-PC, a $4 VPS or the idle CPU in the box under your TV can run a personal cloud. What stays expensive is attention: the 2 a.m. database migration, the container that won't start after an update, not knowing what's in the software holding your family photos.
 
@@ -37,6 +39,60 @@ MyCloud is built for that world:
 
 **Where the others win (honestly):** Immich has face recognition, smart search and a background auto-upload app. Nextcloud has an office suite, collaboration and a huge app store. If you need those, run them. If you want *your iCloud back* with the least possible machinery between you and your files, run this.
 
+## Bring your stuff
+
+On your Mac, one command copies everything iCloud keeps there into MyCloud:
+
+```bash
+npx github:DO-SAY-GO/MyCloud import mac --server https://cloud.example.com --user you
+```
+
+| Brings | How | Notes |
+|---|---|---|
+| Contacts | Contacts.app | every card, including photos |
+| Calendars | EventKit | all accounts; repeating events keep their time zone; subscribed calendars are skipped |
+| Reminders | EventKit | each list becomes a CalDAV list that shows up in the Reminders app |
+| Notes | Notes.app | Markdown, with inline images saved alongside; locked notes are skipped |
+| Photos | PhotoKit | **originals** (plus Live Photo videos and RAW pairs), downloaded from iCloud if needed, filed by capture date |
+| iCloud Drive | the folder on disk | original modification dates kept |
+| Voice Memos | the folder on disk | needs Full Disk Access for your terminal |
+| Safari bookmarks | Bookmarks.plist | a standard `bookmarks.html` any browser imports; needs Full Disk Access |
+
+It's **safe to run again**: items are keyed by their Apple IDs, files already on the server are skipped, and Photos resumes where it stopped. Try `--dry-run` first to see the counts, and use `--only photos,notes` to pick sources. macOS will ask once for each app; click OK.
+
+**iPhone over USB:** plug it in, unlock it, tap Trust, then:
+
+```bash
+npx github:DO-SAY-GO/MyCloud import iphone --server https://cloud.example.com --user you
+```
+
+**Anything else** (an SD card, a Google Takeout, an old backup drive):
+
+```bash
+npx github:DO-SAY-GO/MyCloud import folder ~/Takeout/Photos --photos --server … --user you
+```
+
+**No Mac?** In the web app, Calendar › Import takes `.ics` files or a public iCloud calendar link (`webcal://…`), and Contacts › Import takes `.vcf` exports from iCloud.com or Google.
+
+Apple doesn't let any tool export these, so they stay behind: **Passwords** (export a CSV from the Passwords app yourself), **Messages**, **Health**, and iCloud Mail.
+
+## Bring your family
+
+One MyCloud is one household. The first account is the admin. In **Settings › Family › Invite someone**, a link is created that you send by Messages. Your family member picks a username and password and is in.
+
+- Everyone shares a **Family** folder, a **Family** photo album and a **Family** calendar (your iCloud "Family" calendar imports straight into it). Everything else stays private to each person.
+- Forgot a password? The admin sends a one-time **reset link**.
+- Removing someone revokes their access immediately and sets their files aside instead of deleting them.
+
+## One-tap device setup
+
+In **Settings › Add MyCloud to this device**, a configuration profile is downloaded. It's the same file format iOS uses for work accounts, but it isn't MDM: it can't manage, watch or wipe anything. It just adds:
+
+- your **Calendars** (CalDAV) and **Contacts** (CardDAV) accounts, with a fresh per-device app password already filled in, and
+- a **MyCloud icon** on the Home Screen.
+
+Install it via Settings › Profile Downloaded. Remove it any time; revoke that device's app password to cut it off. The profile is **signed** with your server's certificate when MyCloud has it (`--cert/--key`), or with `MYCLOUD_SIGN_CERT` / `MYCLOUD_SIGN_KEY` / `MYCLOUD_SIGN_CHAIN` when a proxy like Caddy holds the certificate. Without that, iOS shows it as "Unverified" but it works the same.
+
 ## What you get
 
 | | Web app | Native sync |
@@ -46,7 +102,8 @@ MyCloud is built for that world:
 | **Notes** | Markdown notes with autosave | They're plain `.md` files in `Drive/Notes`, so any editor works |
 | **Calendar** | Month view, create and delete events | iOS/macOS Calendar and Reminders, Thunderbird, DAVx⁵ |
 | **Contacts** | Search, create and delete | iOS/macOS Contacts, DAVx⁵ |
-| **Account** | App-specific passwords, share-link management | |
+| **Family** | Invites, reset links, shared folder/album/calendar | The shared calendar syncs to everyone's devices |
+| **Account** | App-specific passwords, one-tap device profiles, share-link management | |
 
 Your data stays as plain files on disk: `.ics`, `.vcf`, `.md`, and your photos exactly as uploaded. Back it up with `rsync`, and leave whenever you like.
 
@@ -148,6 +205,9 @@ lib/store.js      On-disk layout; per-collection change log (CTag + sync-token)
 lib/pim.js        Minimal iCalendar / vCard parsing for the web UI
 lib/thumbs.js     Thumbnails via sips (macOS), ImageMagick or ffmpeg, when present
 lib/xml.js        Tiny namespace-aware XML parser
+lib/profile.js    One-tap .mobileconfig (CalDAV + CardDAV + Home Screen icon), optionally signed
+lib/fetch-public.js  Calendar-link fetching that refuses private network addresses
+lib/import/       Importers: mac (Contacts, EventKit, Notes, PhotoKit, files), iphone (ImageCaptureCore), folder
 public/           Web app (vanilla JS, no build step)
 ```
 

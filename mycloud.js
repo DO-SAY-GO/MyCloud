@@ -8,6 +8,9 @@ import { parseArgs } from 'node:util';
 import { createServer } from './lib/server.js';
 import { Auth } from './lib/auth.js';
 import { Store } from './lib/store.js';
+import { DavClient } from './lib/import/client.js';
+import { importMac, MAC_SOURCES } from './lib/import/mac.js';
+import { importIphone, importFolder } from './lib/import/devices.js';
 
 const USAGE = `mycloud — your own iCloud
 
@@ -16,7 +19,14 @@ Usage:
   mycloud adduser <name> [--data DIR]     create a user (prompts for a password)
   mycloud passwd  <name> [--data DIR]     change a user's password
 
-Environment: MYCLOUD_DATA, MYCLOUD_PORT, MYCLOUD_HOST, MYCLOUD_PASSWORD (non-interactive adduser/passwd)
+Bring your stuff (run on the machine that has it; talks to your server with an app password):
+  mycloud import mac    --server URL --user NAME [--only contacts,calendars,…] [--dry-run] [--limit N]
+                        Contacts, Calendars, Reminders, Notes, Photos, iCloud Drive, Voice Memos, Safari bookmarks
+  mycloud import iphone --server URL --user NAME   camera roll of a USB-connected iPhone/iPad
+  mycloud import folder <dir> --server URL --user NAME [--to REMOTE_DIR] [--photos]
+
+Environment: MYCLOUD_DATA, MYCLOUD_PORT, MYCLOUD_HOST, MYCLOUD_PASSWORD (non-interactive adduser/passwd),
+             MYCLOUD_SERVER, MYCLOUD_USER, MYCLOUD_APP_PASSWORD (non-interactive import)
 Default data dir: ~/.mycloud`;
 
 const { values, positionals } = parseArgs({
@@ -24,11 +34,20 @@ const { values, positionals } = parseArgs({
   options: {
     port: { type: 'string' }, host: { type: 'string' }, data: { type: 'string' },
     cert: { type: 'string' }, key: { type: 'string' }, 'trust-proxy': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+    server: { type: 'string' }, user: { type: 'string' }, only: { type: 'string' }, limit: { type: 'string' },
+    'dry-run': { type: 'boolean' }, to: { type: 'string' }, photos: { type: 'boolean' },
   },
 });
 
 const dataDir = path.resolve(values.data || process.env.MYCLOUD_DATA || path.join(os.homedir(), '.mycloud'));
 const [command = 'serve', name] = positionals;
+
+function promptLine(question) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    rl.question(question, (a) => { rl.close(); resolve(a.trim()); });
+  });
+}
 
 function promptHidden(question) {
   return new Promise((resolve) => {
@@ -71,6 +90,7 @@ async function main() {
     return console.error(`✓ ${command === 'adduser' ? 'created' : 'updated'} ${name} in ${dataDir}`);
   }
 
+  if (command === 'import') return runImport(positionals[1], positionals[2]);
   if (command !== 'serve') throw new Error(`unknown command "${command}"\n\n${USAGE}`);
   if (!!values.cert !== !!values.key) throw new Error('--cert and --key go together');
   const port = Number(values.port || process.env.MYCLOUD_PORT || 8080);
@@ -81,6 +101,35 @@ async function main() {
     console.error(`☁️  MyCloud on ${scheme}://${host === '0.0.0.0' ? 'localhost' : host}:${port}   (data: ${dataDir})`);
     if (!Object.keys(auth.users).length) console.error('   No users yet. Create one: mycloud adduser <name>');
   });
+}
+
+async function runImport(source, dir) {
+  if (!['mac', 'iphone', 'folder'].includes(source)) throw new Error(`usage: mycloud import mac|iphone|folder …\n\n${USAGE}`);
+  if (source === 'folder' && !dir) throw new Error('usage: mycloud import folder <dir> --server URL --user NAME');
+  const log = (m) => console.error(m);
+  const server = values.server || process.env.MYCLOUD_SERVER || (await promptLine('MyCloud address (e.g. https://cloud.example.com): '));
+  const user = values.user || process.env.MYCLOUD_USER || (await promptLine('Username: '));
+  const password = process.env.MYCLOUD_APP_PASSWORD || (process.stdin.isTTY ? await promptHidden('App password (Settings › App passwords): ') : '');
+  const client = new DavClient({ server, user, password });
+  await client.check();
+  log(`☁️  Importing into ${client.base.origin} as ${user}`);
+  const opts = { dryRun: !!values['dry-run'], limit: values.limit ? Number(values.limit) : undefined, to: values.to, photos: !!values.photos };
+  let summary;
+  if (source === 'mac') {
+    const only = values.only ? values.only.split(',').map((x) => x.trim()) : MAC_SOURCES;
+    const unknown = only.filter((x) => !MAC_SOURCES.includes(x));
+    if (unknown.length) throw new Error(`unknown --only value(s): ${unknown.join(', ')} (choose from ${MAC_SOURCES.join(', ')})`);
+    log('   macOS may ask to let your terminal control each app. Click OK.');
+    summary = await importMac(client, { only, ...opts }, log);
+  } else if (source === 'iphone') {
+    summary = await importIphone(client, opts, log);
+    log(`  ✓ ${summary.imported ?? 0} imported${summary.skipped?.length ? `, ${summary.skipped.length} skipped` : ''}`);
+  } else {
+    summary = await importFolder(client, dir, opts, log);
+    log(`  ✓ ${summary.imported ?? 0} uploaded${summary.alreadyThere ? `, ${summary.alreadyThere} already there` : ''}`);
+  }
+  log('\nDone. Safe to run again: it only brings what is new.');
+  console.log(JSON.stringify(summary, null, 2));
 }
 
 main().catch((e) => {
