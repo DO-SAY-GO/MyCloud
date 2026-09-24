@@ -42,17 +42,24 @@ security and every generated link from the configured URL rather than from reque
 - **Uploads** are capped per file (`MYCLOUD_MAX_UPLOAD_GB`, default 50) and refused when free space would drop below a
   reserve (`MYCLOUD_DISK_RESERVE_GB`, default 2). Optional per-user quota: `MYCLOUD_QUOTA_GB`. Silent connections are
   dropped after two minutes, and partial uploads are cleaned up.
-- **Thumbnails** (ImageMagick, ffmpeg) run in an OS sandbox: `sandbox-exec` on macOS, `bubblewrap` on Linux. They get no
-  network, no view of the MyCloud data, home directories or other temp files (except the single input), and can write
-  only to a scratch directory. Without a working sandbox, thumbnails are **off** (`MYCLOUD_THUMBNAILS=unsafe` overrides).
+- **Thumbnails** (ImageMagick, ffmpeg) never run next to your data:
+  - **Docker (compose):** in a separate `thumbnailer` container with no data volume, no internet (an `internal`
+    network shared only with MyCloud), a read-only root, no capabilities, and memory and process limits. It receives
+    one file per request and returns a JPEG.
+  - **Directly on a host:** in an OS sandbox: `sandbox-exec` on macOS, `bubblewrap` on Linux. No network, no view of
+    the MyCloud data, home directories or other temp files (except the single input), and writes only to a scratch
+    directory.
+  - With neither available, thumbnails are **off** (`MYCLOUD_THUMBNAILS=unsafe` overrides). Only small JPEG/PNG/WebP
+    originals stand in; HEIC, video and large files show a placeholder.
 - **Deletes** from the web, Finder or the Files app go to **Recently Deleted** for 30 days. Only the admin can
   permanently erase Family items.
 - **State files** (`users.json`, `sessions.json`, `invites.json`, `shares.json`) are changed under a lock file with atomic
   replacement, so the server, the CLI and concurrent requests never lose each other's writes.
 - **Activity log** (`activity.log`): sign-ins and failures, sharing and link access, deletions and restores, device
   passwords, invites, resets and member removal. Admins see everyone's in Settings; members see their own.
-- **Container:** image pinned by digest, non-root user, all capabilities dropped, `no-new-privileges`, read-only root
-  filesystem, memory and process limits.
+- **Containers:** images pinned by digest, non-root user, all capabilities dropped, `no-new-privileges`, read-only root
+  filesystems, memory and process limits. MyCloud itself isn't published on the host, only through Caddy. State files
+  are owner-only (`0600`).
 
 ## Backups and restore
 

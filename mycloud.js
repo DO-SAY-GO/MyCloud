@@ -6,6 +6,7 @@ import os from 'node:os';
 import readline from 'node:readline';
 import { parseArgs } from 'node:util';
 import { createServer } from './lib/server.js';
+import { thumbnailService } from './lib/thumbs.js';
 import { Auth } from './lib/auth.js';
 import { Store } from './lib/store.js';
 import { DavClient, connectWithAccountPassword } from './lib/import/client.js';
@@ -19,6 +20,7 @@ Usage:
                   [--cert FILE --key FILE] [--trust-proxy]   (--trust-proxy: behind exactly one reverse proxy)
   mycloud adduser <name> [--data DIR]     create a user (prompts for a password)
   mycloud passwd  <name> [--data DIR]     reset a password (also disconnects that user's devices)
+  mycloud thumbnailer [--port 8081]       isolated thumbnail worker for MYCLOUD_THUMBNAILER_URL (Docker)
 
 Bring your stuff (run on the machine that has it; talks to your server with an app password):
   mycloud import mac    --server URL --user NAME [--only contacts,calendars,…] [--dry-run] [--limit N]
@@ -94,6 +96,11 @@ async function main() {
   }
 
   if (command === 'import') return runImport(positionals[1], positionals[2]);
+  if (command === 'thumbnailer') {
+    const port = Number(values.port || 8081);
+    thumbnailService().listen(port, values.host || '0.0.0.0', () => console.error(`🖼️  MyCloud thumbnailer on :${port}`));
+    return;
+  }
   if (command !== 'serve') throw new Error(`unknown command "${command}"\n\n${USAGE}`);
   if (!!values.cert !== !!values.key) throw new Error('--cert and --key go together');
   const port = Number(values.port || process.env.MYCLOUD_PORT || 8080);

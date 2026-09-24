@@ -1,8 +1,8 @@
 # Pinned by digest: rebuilds are reproducible and a hijacked tag can't slip in. Bump deliberately.
 FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
-# Thumbnailers (ImageMagick incl. HEIC, ffmpeg) plus bubblewrap to sandbox them. If the container runtime
-# forbids the user namespaces bubblewrap needs, MyCloud turns thumbnails off rather than run them unsandboxed.
-RUN apk add --no-cache imagemagick imagemagick-heic ffmpeg bubblewrap
+# Thumbnail converters (ImageMagick incl. HEIC, ffmpeg). In compose they only run in the isolated
+# `thumbnailer` service, which has no data volume and no internet access.
+RUN apk add --no-cache imagemagick imagemagick-heic ffmpeg
 WORKDIR /app
 COPY package.json mycloud.js ./
 COPY lib ./lib

@@ -124,7 +124,7 @@ MYCLOUD_DOMAIN=cloud.example.com docker compose up -d
 docker compose exec mycloud node mycloud.js adduser you
 ```
 
-Caddy fetches a Let's Encrypt certificate for your domain. Point the domain's DNS at the box first.
+Caddy fetches a Let's Encrypt certificate for your domain; point the domain's DNS at the box first. The stack is three hardened containers: Caddy, MyCloud, and an isolated thumbnailer with no access to your data or the internet.
 
 ## Hosting options
 
@@ -142,8 +142,8 @@ MyCloud wants a machine with a real disk. Pick based on who needs to reach it:
 Use an old laptop, a mini-PC, a Raspberry Pi 5 or a NAS that runs Docker. Your photos stay in your house, and storage costs you one hard drive.
 
 ```bash
-./mycloud.js serve --host 127.0.0.1
-tailscale serve --bg 8080        # https://<machine>.<tailnet>.ts.net
+tailscale serve --bg 8080        # prints https://<machine>.<tailnet>.ts.net
+./mycloud.js serve --host 127.0.0.1 --trust-proxy --public-url https://<machine>.<tailnet>.ts.net
 ```
 
 Install Tailscale on your phone and laptop, then use the `ts.net` address as the server in Settings. You don't open any ports, you don't need a domain, and there's no upload limit. It's reachable only from your own devices.
@@ -177,7 +177,7 @@ Workers have no filesystem. Running MyCloud on Workers would mean moving storage
 
 ### Any other reverse proxy
 
-Proxy to `:8080` and pass `--trust-proxy`, so login throttling sees real client IPs. For native TLS without a proxy: `mycloud serve --cert fullchain.pem --key privkey.pem`.
+Proxy to `:8080` and run `mycloud serve --trust-proxy --public-url https://your.domain`. MyCloud then takes the client address from the entry your proxy appends, marks cookies Secure, sends HSTS, and builds every link and device profile from that URL instead of from request headers. For native TLS without a proxy: `mycloud serve --cert fullchain.pem --key privkey.pem --public-url https://your.domain`.
 
 Use HTTPS before connecting phones over the internet. DAV clients send credentials on every request.
 
@@ -203,8 +203,10 @@ lib/api.js        JSON API for the web app, plus public share links
 lib/auth.js       scrypt passwords, app passwords, sessions, brute-force throttling
 lib/store.js      On-disk layout; per-collection change log (CTag + sync-token)
 lib/pim.js        Minimal iCalendar / vCard parsing for the web UI
-lib/thumbs.js     Thumbnails via sips (macOS), ImageMagick or ffmpeg, when present
+lib/thumbs.js     Sandboxed thumbnails (ImageMagick, ffmpeg): OS sandbox on a host, or an isolated container in Docker
 lib/xml.js        Tiny namespace-aware XML parser
+lib/limits.js     Upload caps, disk reserve and quotas, enforced while streaming
+lib/activity.js   Append-only activity log
 lib/profile.js    One-tap .mobileconfig (CalDAV + CardDAV + Home Screen icon), optionally signed
 lib/fetch-public.js  Calendar-link fetching that refuses private network addresses
 lib/import/       Importers: mac (Contacts, EventKit, Notes, PhotoKit, files), iphone (ImageCaptureCore), folder

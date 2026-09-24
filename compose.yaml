@@ -13,25 +13,42 @@ services:
     build: .
     environment:
       MYCLOUD_PUBLIC_URL: https://${MYCLOUD_DOMAIN:?set MYCLOUD_DOMAIN, e.g. cloud.example.com}
+      MYCLOUD_THUMBNAILER_URL: http://thumbnailer:8081
     volumes:
       - mycloud-data:/data
     tmpfs: [/tmp]
     mem_limit: 1g
+    networks: [web, thumbs]
     # Only reachable through Caddy; nothing is published on the host.
     expose: ["8080"]
+
+  # Media parsers run here, not next to your data: no volumes, no internet, one file at a time.
+  thumbnailer:
+    <<: *hardening
+    build: .
+    command: ["thumbnailer", "--port", "8081"]
+    tmpfs: ["/tmp:size=5g"]
+    mem_limit: 768m
+    networks: [thumbs]
 
   caddy:
     <<: *hardening
     image: caddy:2@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
     cap_add: [NET_BIND_SERVICE]
     ports: ["80:80", "443:443"]
-    # Caddy overwrites X-Forwarded-For with the real peer, which MyCloud (--trust-proxy) relies on.
+    # Caddy replaces X-Forwarded-For with the real peer, which MyCloud (--trust-proxy) relies on.
     command: caddy reverse-proxy --from ${MYCLOUD_DOMAIN} --to mycloud:8080
     volumes:
       - caddy-data:/data
       - caddy-config:/config
     tmpfs: [/tmp]
     mem_limit: 256m
+    networks: [web]
+
+networks:
+  web:
+  thumbs:
+    internal: true # no route to the internet
 
 volumes:
   mycloud-data:
