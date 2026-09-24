@@ -56,14 +56,14 @@ export async function setup({ headroom = Infinity, familyHeadroom = Infinity, di
       return { bavail: Math.floor((GB + diskAboveFloor - (now.bytes - start.bytes)) / 4096), bsize: 4096, ffree: 100 + inodesAboveFloor - (now.entries - start.entries) };
     };
   }
-  const { server, limits, dav, activity } = await createServer({ dataDir: dir, log: quiet, env, statfs });
+  const { server, limits, dav, drive, activity } = await createServer({ dataDir: dir, log: quiet, env, statfs });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'q', password: 'q-password-12' }) });
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const auth = 'Basic ' + Buffer.from(`q:${app}`).toString('base64');
   return {
-    dir, store, base, limits, dav_: dav,
+    dir, store, base, limits, dav_: dav, drive_: drive,
     api: (method, p, body, headers = {}) => fetch(`${base}/api${p}`, { method, headers: { 'X-MyCloud': '1', cookie, ...headers }, body, duplex: 'half' }),
     dav: (method, p, body, headers = {}) => fetch(`${base}${p}`, { method, headers: { Authorization: auth, ...headers }, body, duplex: 'half' }),
     userBytes: () => bytesUnder(store.userRoot('q'), store.cacheRoot('q')),

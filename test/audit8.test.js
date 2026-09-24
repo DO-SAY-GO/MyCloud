@@ -25,7 +25,7 @@ test('sizing: a Drive COPY whose source grows after sizing is charged in full (a
   try {
     await s.dav('PUT', '/dav/files/q/Documents/src.bin', new Uint8Array(50));
     // Grows (through MyCloud, so it is charged) between the COPY's sizing and its copying.
-    s.dav_.hooks.beforeStage = () => s.dav('PUT', '/dav/files/q/Documents/src.bin', new Uint8Array(MiB + 50));
+    s.drive_.hooks.beforeStage = () => s.dav('PUT', '/dav/files/q/Documents/src.bin', new Uint8Array(MiB + 50));
     assert.equal((await s.dav('COPY', '/dav/files/q/Documents/src.bin', null, { Destination: `${s.base}/dav/files/q/Documents/dst.bin` })).status, 201);
     assert.equal((await fs.stat(path.join(s.dir, 'users/q/files/Documents/dst.bin'))).size, MiB + 50);
     await exact(s);
@@ -38,7 +38,7 @@ test('sizing: the grown copy is refused when it no longer fits, and leaves nothi
   const s = await setup({ headroom: 50 + ENTRY_COST + 700 * 1024 }); // room for the grown source, not for its copy too
   try {
     await s.dav('PUT', '/dav/files/q/Documents/src.bin', new Uint8Array(50));
-    s.dav_.hooks.beforeStage = () => s.dav('PUT', '/dav/files/q/Documents/src.bin', new Uint8Array(512 * 1024));
+    s.drive_.hooks.beforeStage = () => s.dav('PUT', '/dav/files/q/Documents/src.bin', new Uint8Array(512 * 1024));
     const r = await s.dav('COPY', '/dav/files/q/Documents/src.bin', null, { Destination: `${s.base}/dav/files/q/Documents/dst.bin` });
     assert.equal(r.status, 507);
     assert.deepEqual((await fs.readdir(path.join(s.dir, 'users/q/files/Documents'))).sort(), ['src.bin']); // no copy, no staging
@@ -65,7 +65,7 @@ test('sizing: cross-budget moves (Drive and calendar) bill and credit what reall
   try {
     await s.api('PUT', '/files/raw?path=Family/f.bin', new Uint8Array(10));
     await s.dav('PUT', '/dav/files/q/Documents/prime.bin', new Uint8Array(10));
-    s.dav_.hooks.beforeMoveLock = () => s.api('PUT', '/files/raw?path=Family/f.bin', new Uint8Array(MiB));
+    s.drive_.hooks.beforeMoveLock = () => s.api('PUT', '/files/raw?path=Family/f.bin', new Uint8Array(MiB));
     assert.equal((await s.dav('MOVE', '/dav/files/q/Family/f.bin', null, { Destination: `${s.base}/dav/files/q/Documents/f.bin` })).status, 201);
     await exact(s);
     await exactFor(s, '#family', s.store.familyRoot());
@@ -208,7 +208,7 @@ test('entries: through DAV, a folder that grows after sizing cannot be copied pa
   try {
     await s.dav('MKCOL', '/dav/files/q/Documents/box/');
     await s.dav('PUT', '/dav/files/q/Documents/box/a.txt', 'a');
-    s.dav_.hooks.beforeStage = async (srcDir) => { for (let i = 0; i < 60; i++) await fs.writeFile(path.join(srcDir, `g${i}`), 'g'); };
+    s.drive_.hooks.beforeStage = async (srcDir) => { for (let i = 0; i < 60; i++) await fs.writeFile(path.join(srcDir, `g${i}`), 'g'); };
     const r = await s.dav('COPY', '/dav/files/q/Documents/box/', null, { Destination: `${s.base}/dav/files/q/Documents/box2/` });
     assert.equal(r.status, 507);
     assert.deepEqual((await fs.readdir(path.join(s.dir, 'users/q/files/Documents'))).sort(), ['box']); // no copy, no staging

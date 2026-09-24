@@ -58,12 +58,18 @@ security and every generated link from the configured URL rather than from reque
   - Calendar and contact changes are transactions: content and sync logs are reserved together and staged, then every
     rename is applied through a durable journal. Staged files and their folders are fsynced before the "prepared"
     record; every renamed folder is fsynced before the "committed" record; replaced files are kept as backups until
-    then. Any failure rolls back in reverse, and a rollback that can't complete **keeps the journal**; a completed
-    rollback is durably marked "aborted" before its record is deleted, and every record deletion is itself fsynced, so a
-    crash can't resurrect a stale record. At startup,
+    then. A rollback first durably records its intention ("rolling back", with each operation's progress), then
+    undoes the renames in reverse, syncs, durably marks the transaction "aborted", and removes the record (fsynced).
+    The rollback is safe to repeat, so a crash anywhere leaves a record recovery handles correctly: "prepared"
+    (nothing undone), "rolling back" (resume), "committed" (verify and finish), or "aborted" (done). A rollback that
+    can't complete keeps its record for the next start. At startup,
     recovery rolls back prepared transactions and verifies committed ones, finishing any rename a power cut lost,
     before discarding backups. A journal it still can't settle is kept, and reported, for the next start. Imports are all or nothing, and moving an object
     between calendars changes the object and both logs together.
+  - The web app and WebDAV share one Drive path. Each budget has a readers-writer lock: changes inside a Drive
+    (upload commits, new folders, deletes, restores, copy commits, LOCK-created files) hold it shared; moving a folder
+    holds both budgets exclusively, so nothing is written beneath a folder while it is measured and moved. Uploads and
+    copies are staged in the budget's own `.staging` area, never inside user folders.
   - Concurrent writers serialize on the destination: uploads, COPY and MOVE take a per-path lock (MOVE locks source
     and destination in a fixed order) and re-check `Overwrite` and existing content at commit time, so racing requests
     get consistent 201/204/412 answers and accounting stays exact. Drive items are staged first and swapped with one
