@@ -45,11 +45,18 @@ security and every generated link from the configured URL rather than from reque
 - **Calendar links** pasted into Import can't reach private or loopback addresses. Addresses are compared as bytes, so
   every spelling counts (`::ffff:7f00:1`, IPv4-compatible, NAT64, 6to4). The check runs inside the connection's own
   address lookup, before any byte is sent, so DNS rebinding doesn't get around it either.
-- **Uploads** hold a reservation while they stream. They are capped per file (`MYCLOUD_MAX_UPLOAD_GB`, default 50),
-  held to an optional per-user quota (`MYCLOUD_QUOTA_GB`; overwriting only counts the difference), and refused when
-  free space would drop below a reserve (`MYCLOUD_DISK_RESERVE_GB`, default 2). Checks count bytes still in flight
-  across all concurrent uploads, and apply byte by byte to chunked uploads. Silent connections are dropped after two
-  minutes, and partial uploads are cleaned up.
+- **Storage admission:** every operation that grows storage passes one gate before writing: Drive and WebDAV uploads,
+  CalDAV/CardDAV writes, `.ics`/`.vcf` imports, new events and contacts, WebDAV COPY (sized recursively), moves into
+  another budget, new folders and collections, and the thumbnail cache.
+  - Budgets: each user (`MYCLOUD_QUOTA_GB`), the shared Family space (`MYCLOUD_FAMILY_QUOTA_GB`, defaulting to the user
+    quota so Family isn't a way around it), and a system budget for thumbnails (nobody's quota, still bound by the
+    disk reserve). Where a write is billed is decided by where it really lands, with links followed.
+  - The disk reserve (`MYCLOUD_DISK_RESERVE_GB`, default 2) is a byte ledger: free space at the last measurement,
+    minus bytes written since, minus bytes other operations have claimed. It's checked on every reservation and every
+    streamed chunk, so even a small upload can't cross the floor. Real measurements refresh it.
+  - Reservations are claimed atomically, count everything in flight across protocols, bill overwrites only for the
+    difference, and are released on every error path. Files are capped at `MYCLOUD_MAX_UPLOAD_GB` (default 50), and
+    collection properties at 64 KB. Silent connections are dropped after two minutes; partial uploads are cleaned up.
 - **Sign-in attempts** are rationed (2 in flight per address, 4 overall) and throttled per address and per account,
   so parallel guessing is held to the same limits as sequential guessing.
 - **Thumbnails** (ImageMagick, ffmpeg) never run next to your data:
