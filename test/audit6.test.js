@@ -44,7 +44,7 @@ async function tight(headroomAboveFloor) {
   await store.ensureUser('q');
   const limits = new Limits(store, { MYCLOUD_DISK_RESERVE_GB: '2' }, { statfs: async () => disk });
   store.gate = (bytes, replacing, entries, fn) => limits.withBytes(SYSTEM, bytes, replacing, fn, { entries });
-  store.freed = (p, stats) => { limits.ownerOf(p).then((b) => b && limits.freed(b, stats)); };
+  store.freed = async (p, stats) => { const b = await limits.ownerOf(p); if (b) limits.freed(b, stats); };
   await limits.used('q');
   const setFree = (aboveFloor) => { disk.bavail = (2 * GB + aboveFloor) / 4096; limits.measured.at = 0; };
   setFree(headroomAboveFloor);

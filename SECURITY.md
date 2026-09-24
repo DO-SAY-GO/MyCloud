@@ -55,9 +55,15 @@ security and every generated link from the configured URL rather than from reque
     properties at 64 KB), and every write of it is still reserved against the disk and inode floors. Removals credit
     their budget immediately, and each reservation is settled against what is really on disk at commit time, so
     cached usage always matches a recount, even under concurrent writes to the same name.
-  - Calendar and contact changes are transactions: content and sync log are reserved together, staged, then swapped
-    in. A refused reservation or failed write leaves both as they were. Imports are all or nothing, and moving an
-    object between calendars updates both logs and the object together.
+  - Calendar and contact changes are transactions: content and sync logs are reserved together and staged, then every
+    rename is applied through a durable journal (fsynced before anything changes; replaced files kept as backups until
+    the commit record is written). Any failure rolls back in reverse. After a crash, startup recovery finishes a
+    committed transaction or restores the state from before it. Imports are all or nothing, and moving an object
+    between calendars changes the object and both logs together.
+  - Concurrent writers serialize on the destination: uploads, COPY and MOVE take a per-path lock (MOVE locks source
+    and destination in a fixed order) and re-check `Overwrite` and existing content at commit time, so racing requests
+    get consistent 201/204/412 answers and accounting stays exact. Drive items are staged first and swapped with one
+    rename; a replaced item goes to Recently Deleted.
   - Every filesystem entry is charged a 4 KB block on top of its content, and each budget has a file-and-folder limit
     (`MYCLOUD_MAX_FILES`, default 1,000,000) plus a free-inode reserve (`MYCLOUD_INODE_RESERVE`, default 10,000), so
     empty files and metadata can't exhaust the filesystem.
@@ -129,7 +135,10 @@ Test step 3 once, before you need it.
 ## Known gaps (not done yet)
 
 - **No file versioning:** overwriting a file replaces it. Deletes are recoverable (Recently Deleted); overwrites aren't.
-- **WebDAV locks are advisory**, so two clients editing the same file at once can overwrite each other.
+- **WebDAV locks are advisory**, so two clients editing the same file at once can overwrite each other (each write
+  is still whole: the last one wins).
+- **Drive overwrites aren't journaled.** A crash between moving the old item to Recently Deleted and renaming the new
+  one in leaves the old item recoverable in Recently Deleted rather than in place.
 - **No MFA or passkeys** for the web account yet.
 - **Data at rest is not encrypted by MyCloud.** Use disk encryption. Anyone who controls the running server can read
   everything.
