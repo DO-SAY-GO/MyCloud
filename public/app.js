@@ -161,13 +161,13 @@ async function driveView(view, pathParts) {
       h('td', { class: 'meta hide-sm' }, fmtDate(it.mtime)),
       h('td', { class: 'actions' },
         it.dir ? null : h('button', { class: 'icon', title: 'Download', onclick: () => { location.href = rawUrl(full, { download: 1 }); } }, '⬇️'),
-        h('button', { class: 'icon', title: 'Share link', onclick: () => shareItem(full) }, '🔗'),
+        h('button', { class: 'icon', title: 'Share link', onclick: () => shareItem(full, it.dir) }, '🔗'),
         it.shared ? null : h('button', { class: 'icon', title: 'Rename', onclick: async () => {
           const r = await ask({ title: 'Rename', fields: [{ name: 'name', label: 'Name', value: it.name, required: true }], submit: 'Rename' });
           if (r && r.name !== it.name) await api('POST', '/files/move', { from: full, to: joinPath(cwd, r.name) }).then(refresh, fail);
         } }, '✏️'),
         it.shared ? null : h('button', { class: 'icon', title: 'Delete', onclick: async () => {
-          if (await ask({ title: `Delete “${it.name}”?`, text: it.dir ? 'The folder and everything in it will be deleted.' : 'This cannot be undone.', submit: 'Delete', danger: true })) {
+          if (await ask({ title: `Delete “${it.name}”?`, text: `${it.dir ? 'The folder and everything in it move' : 'It moves'} to Recently Deleted for 30 days.`, submit: 'Delete', danger: true })) {
             await api('DELETE', '/files' + qs({ path: full })).then(refresh, fail);
           }
         } }, '🗑️')));
@@ -186,6 +186,7 @@ async function driveView(view, pathParts) {
         const r = await ask({ title: 'New folder', fields: [{ name: 'name', label: 'Name', required: true }], submit: 'Create' });
         if (r) await api('POST', '/files/mkdir', { path: joinPath(cwd, r.name) }).then(refresh, fail);
       } }, 'New folder'),
+      h('button', { onclick: () => { location.hash = '#trash'; } }, 'Recently Deleted'),
       h('button', { class: 'primary', onclick: async () => upload(await pickFiles()) }, 'Upload')),
     crumbs, card);
 }
@@ -201,13 +202,42 @@ function fileIcon(name) {
   return '📄';
 }
 
-async function shareItem(path) {
+async function shareItem(path, isDir = false) {
+  const name = path.split('/').pop();
+  const r = await ask({
+    title: `Share “${name}”`,
+    text: isDir
+      ? `Anyone with the link can browse and download everything inside “${name}”, including its subfolders and anything added later.`
+      : 'Anyone with the link can view and download this file.',
+    fields: [{ name: 'days', label: 'Link works for', type: 'select', value: '7', options: [['1', '1 day'], ['7', '7 days'], ['30', '30 days'], ['365', '1 year'], ['0', 'Until I revoke it']] }],
+    submit: 'Create link',
+  });
+  if (!r) return;
   try {
-    const { url } = await api('POST', '/shares', { path });
+    const { url } = await api('POST', '/shares', { path, days: Number(r.days) });
     const full = location.origin + url;
     await navigator.clipboard?.writeText(full).catch(() => {});
-    await ask({ title: 'Share link', text: 'Anyone with this link can view and download. Revoke it any time in Settings.', extra: h('div', { class: 'secret', style: { fontSize: '13px' } }, full), submit: null });
+    await ask({ title: 'Link copied', text: 'Revoke it any time in Settings › Share links.', extra: h('div', { class: 'secret small' }, full), submit: null });
   } catch (e) { fail(e); }
+}
+
+// ---------------------------------------------------------------- Recently Deleted
+async function trashView(view) {
+  const { items } = await api('GET', '/trash');
+  fill(view,
+    h('div', { class: 'view-head' }, h('h2', {}, 'Recently Deleted'), h('a', { href: '#drive' }, '‹ Drive')),
+    h('p', { class: 'muted' }, 'Deleted items stay here for 30 days. Things deleted from the Family folder can be restored by anyone in the family.'),
+    items.length ? h('div', { class: 'card' }, h('table', { class: 'files trash' }, h('tbody', {}, items.map((it) => h('tr', {},
+      h('td', { class: 'name' }, `${it.shared ? '👨‍👩‍👧' : it.dir ? '📁' : fileIcon(it.rel)}  ${it.rel}`, h('small', { class: 'muted' }, `  deleted by ${it.by}`)),
+      h('td', { class: 'meta hide-sm' }, fmtDate(Date.parse(it.deletedAt))),
+      h('td', { class: 'actions' },
+        h('button', { onclick: () => api('POST', '/trash/restore', { id: it.id, shared: it.shared }).then((r) => { toast(`Restored to ${r.path}`); route(); }, fail) }, 'Restore'),
+        !it.shared || me.admin ? h('button', { class: 'icon danger', title: 'Delete now', onclick: async () => {
+          if (await ask({ title: 'Delete forever?', text: `“${it.rel}” will be erased and can’t be restored.`, submit: 'Delete forever', danger: true })) {
+            await api('DELETE', '/trash' + qs({ id: it.id, shared: it.shared ? 1 : 0 })).then(() => route(), fail);
+          }
+        } }, '✕') : null))))))
+      : h('div', { class: 'card empty' }, 'Nothing here.'));
 }
 
 // ---------------------------------------------------------------- Photos
@@ -528,8 +558,8 @@ async function contactsView(view) {
 
 // ---------------------------------------------------------------- Settings
 async function settingsView(view) {
-  const [{ appPasswords }, { shares }, family] = await Promise.all([api('GET', '/app-passwords'), api('GET', '/shares'), api('GET', '/family')]);
-  const secureOrigin = me.origin.startsWith('https:');
+  const [{ appPasswords }, { shares }, family, { events }] = await Promise.all([api('GET', '/app-passwords'), api('GET', '/shares'), api('GET', '/family'), api('GET', '/activity')]);
+  const secureOrigin = me.secure;
   const cli = (sub) => `npx github:DO-SAY-GO/MyCloud import ${sub} --server ${me.origin} --user ${me.user}`;
 
   const shareLink = async (title, text, path) => {
@@ -633,32 +663,55 @@ async function settingsView(view) {
       h('div', { class: 'card' },
         h('h3', {}, 'Share links'),
         shares.length ? shares.map((s) => h('div', { class: 'list-row' },
-          h('span', {}, s.path, h('br'), h('small', { class: 'muted' }, h('a', { href: `/s/${s.token}`, target: '_blank' }, 'open'), ` · created ${fmtDate(s.created)}`)),
+          h('span', {}, s.path, s.dir ? ' (folder, everything inside)' : '', h('br'), h('small', { class: 'muted' }, h('a', { href: `/s/${s.token}`, target: '_blank' }, 'open'),
+            ` · created ${fmtDate(s.created)}`, s.expires ? (s.expires < Date.now() ? ' · expired' : ` · expires ${fmtDate(s.expires)}`) : ' · never expires')),
           h('button', { class: 'danger', onclick: () => api('DELETE', '/shares' + qs({ token: s.token })).then(() => route(), fail) }, 'Revoke')))
           : h('p', { class: 'muted' }, 'No active links.')),
+
+      h('div', { class: 'card' },
+        h('h3', {}, family.admin ? 'Activity (everyone)' : 'Your activity'),
+        h('p', { class: 'muted' }, 'Sign-ins, sharing, deletions, device passwords and invites.'),
+        events.length ? h('table', { class: 'files activity' }, h('tbody', {}, events.slice(0, 25).map((e) => h('tr', {},
+          h('td', { class: 'meta' }, fmtDate(Date.parse(e.t))),
+          h('td', {}, describeEvent(e)),
+          h('td', { class: 'meta hide-sm' }, e.ip || ''))))) : h('p', { class: 'muted' }, 'Nothing yet.')),
 
       h('div', { class: 'card' },
         h('h3', {}, 'Account'),
         me.disk ? h('p', { class: 'muted' }, `${fmtSize(me.disk.free)} free of ${fmtSize(me.disk.total)}`) : null,
         h('div', { class: 'row' },
           h('button', { onclick: async () => {
-            const r = await ask({ title: 'Change password', submit: 'Change', fields: [
-              { name: 'current', label: 'Current password', type: 'password', required: true },
-              { name: 'next', label: 'New password (8+ characters)', type: 'password', required: true }] });
-            if (r) await api('POST', '/password', r).then(() => toast('Password changed'), fail);
+            const r = await ask({ title: 'Change password', submit: 'Change',
+              text: 'Other browsers are signed out. Unless you keep them, your phones and laptops are disconnected too and need to be set up again (safest if you think a password leaked).',
+              fields: [
+                { name: 'current', label: 'Current password', type: 'password', required: true },
+                { name: 'next', label: 'New password (8+ characters)', type: 'password', required: true },
+                { name: 'keepDevices', label: 'Keep my devices connected', type: 'checkbox' }] });
+            if (r) await api('POST', '/password', r).then(() => { toast(r.keepDevices ? 'Password changed' : 'Password changed. Devices were disconnected.'); route(); }, fail);
           } }, 'Change password'),
           h('button', { onclick: () => api('POST', '/logout').then(showLogin, fail) }, 'Sign out')))));
 }
 
+const EVENT_TEXT = {
+  login: 'signed in', 'login.fail': 'failed sign-in', 'file.delete': 'deleted', 'file.restore': 'restored', 'file.purge': 'erased from trash',
+  'share.create': 'shared', 'share.revoke': 'revoked a link', 'share.access': 'link opened:', 'device.add': 'added device', 'device.revoke': 'revoked a device',
+  'device.profile': 'set up device', 'password.change': 'changed password', 'invite.create': 'created an invite', 'invite.reset': 'created a reset link for',
+  'invite.redeem': 'joined', 'member.remove': 'removed',
+};
+function describeEvent(e) {
+  const what = [e.path, e.label, e.target].filter(Boolean).join(' ');
+  return `${e.user ?? 'someone'} ${EVENT_TEXT[e.event] ?? e.event}${what ? ` ${what}` : ''}`;
+}
+
 // ---------------------------------------------------------------- shell
 let me = null;
-const VIEWS = { drive: driveView, photos: photosView, notes: notesView, calendar: calendarView, contacts: contactsView, settings: settingsView };
+const VIEWS = { trash: trashView, drive: driveView, photos: photosView, notes: notesView, calendar: calendarView, contacts: contactsView, settings: settingsView };
 
 async function route() {
   if (!me) return;
   const [name, ...rest] = location.hash.slice(1).split('/');
   const view = VIEWS[name] ? name : 'drive';
-  for (const a of document.querySelectorAll('.sidebar a')) a.classList.toggle('active', a.dataset.view === view);
+  for (const a of document.querySelectorAll('.sidebar a')) a.classList.toggle('active', a.dataset.view === (view === 'trash' ? 'drive' : view));
   const el = $('#view');
   el.ondragover = el.ondrop = el.ondragleave = null;
   try {

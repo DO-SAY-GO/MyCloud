@@ -200,3 +200,5 @@ summary { cursor: pointer; color: var(--accent); }
 .list-row .row { gap: 10px; }
 .list-row .avatar { width: 30px; height: 30px; font-size: 13px; }
 @media (max-width: 760px) { .toast { bottom: 92px; } }
+.files.trash .actions button { opacity: 1; }
+.files.activity td { padding: 6px 12px; font-size: 13px; }

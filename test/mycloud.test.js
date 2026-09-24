@@ -11,15 +11,21 @@ import { parseXml } from '../lib/xml.js';
 let dataDir, server, base, cookie;
 const USER = 'alice';
 const PASS = 'correct horse battery';
-const basic = 'Basic ' + Buffer.from(`${USER}:${PASS}`).toString('base64');
+let basic, bobBasic;
+const basicFor = (u, p) => 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64');
 
 before(async () => {
   dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mycloud-test-'));
   const auth = new Auth(dataDir);
   await auth.load();
-  await auth.setPassword(USER, PASS);
-  await auth.setPassword('bob', 'bob-password-123');
-  ({ server } = await createServer({ dataDir, log: { error() {} } }));
+  await auth.setPassword(USER, PASS, { create: true });
+  await auth.setPassword('bob', 'bob-password-123', { create: true });
+  ({ server } = await createServer({ dataDir, log: { error() {} }, env: { MYCLOUD_THUMBNAILS: 'off' } }));
+  // DAV only takes device (app) passwords.
+  const srvAuth = new Auth(dataDir);
+  await srvAuth.load();
+  basic = basicFor(USER, (await srvAuth.createAppPassword(USER, 'tests')).password);
+  bobBasic = basicFor('bob', (await srvAuth.createAppPassword('bob', 'tests')).password);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -29,6 +35,7 @@ after(async () => {
   await fs.rm(dataDir, { recursive: true, force: true });
 });
 
+const settle = () => new Promise((r) => setTimeout(r, 2600)); // the server re-reads users.json every 2s
 const api = (method, p, body, headers = {}) => fetch(base + '/api' + p, {
   method,
   headers: { 'X-MyCloud': '1', cookie, ...(body !== undefined && typeof body !== 'string' && { 'Content-Type': 'application/json' }), ...headers },
@@ -37,6 +44,7 @@ const api = (method, p, body, headers = {}) => fetch(base + '/api' + p, {
 const dav = (method, p, body, headers = {}) => fetch(base + p, { method, headers: { Authorization: basic, ...headers }, body });
 
 test('web login rejects bad passwords and issues a session cookie', async () => {
+  await settle();
   const bad = await api('POST', '/login', { username: USER, password: 'nope' });
   assert.equal(bad.status, 401);
   const ok = await api('POST', '/login', { username: USER, password: PASS });
@@ -219,8 +227,8 @@ test('family: reset link sets a new password', async () => {
   const token = url.split('/').pop();
   const r = await fetch(base + '/api/join', { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ token, password: 'carol-new-password' }) });
   assert.equal((await r.json()).user, 'carol');
-  const basicCarol = 'Basic ' + Buffer.from('carol:carol-new-password').toString('base64');
-  assert.equal((await fetch(base + '/dav/principals/carol/', { method: 'PROPFIND', headers: { Authorization: basicCarol, Depth: '0' } })).status, 207);
+  const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'carol', password: 'carol-new-password' }) });
+  assert.equal(login.status, 200);
 });
 
 test('family: shared folder and calendar are visible to every member', async () => {
@@ -233,7 +241,7 @@ test('family: shared folder and calendar are visible to every member', async () 
 
   const ics = buildEvent({ uid: 'fam1', title: 'Grandma visits', start: '2026-12-24', allDay: true });
   assert.equal((await dav('PUT', '/dav/calendars/alice/family/fam1.ics', ics)).status, 201);
-  const basicBob = 'Basic ' + Buffer.from('bob:bob-password-123').toString('base64');
+  const basicBob = bobBasic;
   const list = await (await fetch(base + '/dav/calendars/bob/', { method: 'PROPFIND', headers: { Authorization: basicBob, Depth: '1' } })).text();
   assert.match(list, /\/dav\/calendars\/bob\/family\//);
   const got = await fetch(base + '/dav/calendars/bob/family/fam1.ics', { headers: { Authorization: basicBob } });
@@ -294,4 +302,112 @@ test('one-tap device profile carries both accounts and is single-use', async () 
   const basicAp = 'Basic ' + Buffer.from(`alice:${password}`).toString('base64');
   assert.equal((await fetch(base + '/dav/principals/alice/', { method: 'PROPFIND', headers: { Authorization: basicAp, Depth: '0' } })).status, 207);
   assert.equal((await api('GET', url.replace(/^\/api/, ''))).status, 404);
+});
+
+const post = (p, body, headers = {}) => fetch(base + p, { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+
+test('audit: an invite link works exactly once under concurrent redemption', async () => {
+  const { url } = await (await api('POST', '/family/invites', { kind: 'join' })).json();
+  const token = url.split('/').pop();
+  const results = await Promise.all(['r1', 'r2', 'r3', 'r4', 'r5'].map((n) => post('/api/join', { token, username: n, password: `${n}-password-123` })));
+  assert.equal(results.filter((r) => r.status === 200).length, 1);
+});
+
+test('audit: two invites racing for one username create one account and keep the loser invite', async () => {
+  const t1 = (await (await api('POST', '/family/invites', { kind: 'join' })).json()).url.split('/').pop();
+  const t2 = (await (await api('POST', '/family/invites', { kind: 'join' })).json()).url.split('/').pop();
+  const [a, b] = await Promise.all([post('/api/join', { token: t1, username: 'same', password: 'same-password-1' }), post('/api/join', { token: t2, username: 'same', password: 'same-password-2' })]);
+  assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+  const loser = a.status === 200 ? t2 : t1;
+  assert.equal((await fetch(`${base}/api/join?token=${loser}`)).status, 200); // still usable
+});
+
+test('audit: DAV refuses the account password', async () => {
+  assert.equal((await dav('PROPFIND', '/dav/principals/alice/', null, { Authorization: basicFor(USER, PASS), Depth: '0' })).status, 401);
+});
+
+test('audit: password change disconnects devices unless kept; reset always does', async () => {
+  const auth = new Auth(dataDir);
+  await auth.load();
+  const { password } = await auth.createAppPassword('bob', 'phone');
+  await settle();
+  const bobDav = () => fetch(base + '/dav/principals/bob/', { method: 'PROPFIND', headers: { Authorization: basicFor('bob', password), Depth: '0' } });
+  assert.equal((await bobDav()).status, 207);
+  const bob = await bobLogin();
+  assert.equal((await api('POST', '/password', { current: 'bob-password-123', next: 'bob-password-456', keepDevices: true }, { cookie: bob })).status, 200);
+  assert.equal((await bobDav()).status, 207); // kept on request
+  assert.equal((await api('GET', '/me', undefined, { cookie: bob })).status, 200); // this browser stays signed in
+  assert.equal((await api('POST', '/password', { current: 'bob-password-456', next: 'bob-password-123' }, { cookie: bob })).status, 200);
+  assert.equal((await bobDav()).status, 401); // default: devices disconnected
+  bobBasic = null;
+});
+
+test('audit: shares refuse the whole Drive and Family content from non-admins, and expire', async () => {
+  assert.equal((await api('POST', '/shares', { path: '' })).status, 400);
+  assert.equal((await api('POST', '/shares', { path: '/' })).status, 400);
+  const bob = await bobLogin();
+  await api('PUT', '/files/raw?path=Family/secret.txt', 'family only');
+  assert.equal((await api('POST', '/shares', { path: 'Family/secret.txt' }, { cookie: bob })).status, 403);
+  assert.equal((await api('POST', '/shares', { path: 'Family' }, { cookie: bob })).status, 403);
+  await api('PUT', '/files/raw?path=Documents/exp.txt', 'x');
+  const s = await (await api('POST', '/shares', { path: 'Documents/exp.txt', days: 1 })).json();
+  assert.ok(s.expires > Date.now() && s.expires <= Date.now() + 86400 * 1000);
+  assert.equal((await fetch(base + s.url)).status, 200);
+});
+
+test('audit: deletes go to Recently Deleted and can be restored', async () => {
+  await api('PUT', '/files/raw?path=Documents/keep.txt', 'precious');
+  await api('DELETE', '/files?path=Documents/keep.txt');
+  assert.equal((await api('GET', '/files/raw?path=Documents/keep.txt')).status, 404);
+  const { items } = await (await api('GET', '/trash')).json();
+  const item = items.find((i) => i.rel === 'Documents/keep.txt');
+  assert.ok(item);
+  const r = await (await api('POST', '/trash/restore', { id: item.id, shared: item.shared })).json();
+  assert.equal(r.path, 'Documents/keep.txt');
+  assert.equal(await (await api('GET', '/files/raw?path=Documents/keep.txt')).text(), 'precious');
+  // Finder deletes over WebDAV land there too.
+  await dav('PUT', '/dav/files/alice/Documents/via-finder.txt', 'f');
+  assert.equal((await dav('DELETE', '/dav/files/alice/Documents/via-finder.txt')).status, 204);
+  assert.ok((await (await api('GET', '/trash')).json()).items.some((i) => i.rel === 'Documents/via-finder.txt'));
+});
+
+test('audit: calendar links by hostname cannot reach loopback', async () => {
+  const port = new URL(base).port;
+  for (const u of [`http://localhost:${port}/`, `http://127.0.0.1.nip.io:${port}/`]) {
+    const r = await api('POST', '/import?type=calendar&url=' + encodeURIComponent(u));
+    assert.ok([400, 502].includes(r.status), `${u} -> ${r.status}`);
+    assert.notEqual(r.status, 200);
+  }
+});
+
+test('audit: behind a proxy — Secure cookies, HSTS, canonical URLs, unspoofable client IP, upload cap', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mycloud-proxy-'));
+  const a = new Auth(dir);
+  await a.load();
+  await a.setPassword('pat', 'pat-password-1', { create: true });
+  const { server: s2 } = await createServer({ dataDir: dir, trustProxy: true, publicUrl: 'https://cloud.example.com', log: { error() {} }, env: { MYCLOUD_MAX_UPLOAD_GB: String(1024 / 1024 ** 3), MYCLOUD_THUMBNAILS: 'off' } });
+  await new Promise((r) => s2.listen(0, '127.0.0.1', r));
+  const b2 = `http://127.0.0.1:${s2.address().port}`;
+  try {
+    const login = await fetch(b2 + '/api/login', { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json', 'X-Forwarded-Proto': 'http', Host: 'evil.example' }, body: JSON.stringify({ username: 'pat', password: 'pat-password-1' }) });
+    assert.match(login.headers.get('set-cookie'), /; Secure/);
+    assert.match(login.headers.get('strict-transport-security'), /max-age=/);
+    const c = login.headers.get('set-cookie').split(';')[0];
+    const me = await (await fetch(b2 + '/api/me', { headers: { cookie: c, Host: 'evil.example' } })).json();
+    assert.equal(me.origin, 'https://cloud.example.com'); // never the Host header
+    // Upload cap is enforced while streaming (no Content-Length).
+    const big = new ReadableStream({ start(ctl) { ctl.enqueue(new Uint8Array(4096)); ctl.close(); } });
+    const up = await fetch(b2 + '/api/files/raw?path=Documents/big.bin', { method: 'PUT', headers: { cookie: c, 'X-MyCloud': '1' }, body: big, duplex: 'half' });
+    assert.equal(up.status, 413);
+    assert.deepEqual((await fs.readdir(path.join(dir, 'users/pat/files/Documents'))).filter((n) => n.startsWith('.mycloud-upload')), []);
+    // Rotating the (client-controlled) left part of X-Forwarded-For does not dodge throttling.
+    let last;
+    for (let i = 0; i < 7; i++) {
+      last = await fetch(b2 + '/api/login', { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json', 'X-Forwarded-For': `10.0.0.${i}, 203.0.113.9` }, body: JSON.stringify({ username: 'nobody', password: 'wrong-password' }) });
+    }
+    assert.equal(last.status, 429);
+  } finally {
+    s2.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });

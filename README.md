@@ -223,18 +223,16 @@ Data layout:
 
 ## Security
 
-- Passwords and app passwords are hashed with scrypt. After repeated failures, logins lock out with exponential backoff per client IP.
-- Session cookies are `HttpOnly` and `SameSite=Lax`, and API writes require a custom header (CSRF).
-- User files are served with a `sandbox` Content-Security-Policy, so an uploaded HTML or SVG file can't run script as you.
-- Paths are validated segment by segment, and every user is confined to their own tree.
-- WebDAV locks are advisory only (enough for Finder, not enforced).
-
-Found something? Please open an issue.
+See **[SECURITY.md](SECURITY.md)** for the threat model, the recommended deployments (Tailscale-only, or Caddy with
+`--public-url` and `--trust-proxy`), backups and restore, and the known gaps. In short: device-only app passwords for
+sync, single-use invites, Secure cookies and HSTS behind proxies, sandboxed thumbnailing, upload caps, expiring share
+links, a 30-day Recently Deleted, and an activity log.
 
 ## Status and roadmap
 
 This is an early release, but it works. The tests cover the DAV protocol flows (`npm test`). Contributions are welcome. Some next steps:
 
+- [ ] File versioning, MFA / passkeys, password-protected share links (see SECURITY.md › Known gaps)
 - [ ] Server-side recurring-event expansion and time-range filtering for calendar-query
 - [ ] Reminders (VTODO) view in the web app
 - [ ] Albums, EXIF dates and map view for Photos

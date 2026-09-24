@@ -8,16 +8,17 @@ import { parseArgs } from 'node:util';
 import { createServer } from './lib/server.js';
 import { Auth } from './lib/auth.js';
 import { Store } from './lib/store.js';
-import { DavClient } from './lib/import/client.js';
+import { DavClient, connectWithAccountPassword } from './lib/import/client.js';
 import { importMac, MAC_SOURCES } from './lib/import/mac.js';
 import { importIphone, importFolder } from './lib/import/devices.js';
 
 const USAGE = `mycloud — your own iCloud
 
 Usage:
-  mycloud serve   [--port 8080] [--host 0.0.0.0] [--data DIR] [--cert FILE --key FILE] [--trust-proxy]
+  mycloud serve   [--port 8080] [--host 0.0.0.0] [--data DIR] [--public-url https://cloud.example.com]
+                  [--cert FILE --key FILE] [--trust-proxy]   (--trust-proxy: behind exactly one reverse proxy)
   mycloud adduser <name> [--data DIR]     create a user (prompts for a password)
-  mycloud passwd  <name> [--data DIR]     change a user's password
+  mycloud passwd  <name> [--data DIR]     reset a password (also disconnects that user's devices)
 
 Bring your stuff (run on the machine that has it; talks to your server with an app password):
   mycloud import mac    --server URL --user NAME [--only contacts,calendars,…] [--dry-run] [--limit N]
@@ -26,6 +27,8 @@ Bring your stuff (run on the machine that has it; talks to your server with an a
   mycloud import folder <dir> --server URL --user NAME [--to REMOTE_DIR] [--photos]
 
 Environment: MYCLOUD_DATA, MYCLOUD_PORT, MYCLOUD_HOST, MYCLOUD_PASSWORD (non-interactive adduser/passwd),
+             MYCLOUD_PUBLIC_URL, MYCLOUD_TRUST_PROXY=1, MYCLOUD_MAX_UPLOAD_GB, MYCLOUD_DISK_RESERVE_GB, MYCLOUD_QUOTA_GB,
+             MYCLOUD_THUMBNAILS=auto|off|unsafe, MYCLOUD_SIGN_CERT/KEY/CHAIN,
              MYCLOUD_SERVER, MYCLOUD_USER, MYCLOUD_APP_PASSWORD (non-interactive import)
 Default data dir: ~/.mycloud`;
 
@@ -33,7 +36,7 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     port: { type: 'string' }, host: { type: 'string' }, data: { type: 'string' },
-    cert: { type: 'string' }, key: { type: 'string' }, 'trust-proxy': { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+    cert: { type: 'string' }, key: { type: 'string' }, 'trust-proxy': { type: 'boolean' }, 'public-url': { type: 'string' }, help: { type: 'boolean', short: 'h' },
     server: { type: 'string' }, user: { type: 'string' }, only: { type: 'string' }, limit: { type: 'string' },
     'dry-run': { type: 'boolean' }, to: { type: 'string' }, photos: { type: 'boolean' },
   },
@@ -85,7 +88,7 @@ async function main() {
     const exists = !!auth.users[name];
     if (command === 'adduser' && exists) throw new Error(`user "${name}" already exists — use: mycloud passwd ${name}`);
     if (command === 'passwd' && !exists) throw new Error(`no user "${name}" — use: mycloud adduser ${name}`);
-    await auth.setPassword(name, await readPassword());
+    await auth.setPassword(name, await readPassword(), command === 'adduser' ? { create: true } : { revokeDevices: true });
     await new Store(dataDir).ensureUser(name);
     return console.error(`✓ ${command === 'adduser' ? 'created' : 'updated'} ${name} in ${dataDir}`);
   }
@@ -95,7 +98,9 @@ async function main() {
   if (!!values.cert !== !!values.key) throw new Error('--cert and --key go together');
   const port = Number(values.port || process.env.MYCLOUD_PORT || 8080);
   const host = values.host || process.env.MYCLOUD_HOST || '0.0.0.0';
-  const { server, auth } = await createServer({ dataDir, cert: values.cert, key: values.key, trustProxy: values['trust-proxy'] });
+  const publicUrl = values['public-url'] || process.env.MYCLOUD_PUBLIC_URL;
+  const trustProxy = !!values['trust-proxy'] || process.env.MYCLOUD_TRUST_PROXY === '1';
+  const { server, auth } = await createServer({ dataDir, cert: values.cert, key: values.key, trustProxy, publicUrl });
   server.listen(port, host, () => {
     const scheme = values.cert ? 'https' : 'http';
     console.error(`☁️  MyCloud on ${scheme}://${host === '0.0.0.0' ? 'localhost' : host}:${port}   (data: ${dataDir})`);
@@ -109,9 +114,17 @@ async function runImport(source, dir) {
   const log = (m) => console.error(m);
   const server = values.server || process.env.MYCLOUD_SERVER || (await promptLine('MyCloud address (e.g. https://cloud.example.com): '));
   const user = values.user || process.env.MYCLOUD_USER || (await promptLine('Username: '));
-  const password = process.env.MYCLOUD_APP_PASSWORD || (process.stdin.isTTY ? await promptHidden('App password (Settings › App passwords): ') : '');
-  const client = new DavClient({ server, user, password });
+  let client;
+  let revoke = async () => {};
+  if (process.env.MYCLOUD_APP_PASSWORD) {
+    client = new DavClient({ server, user, password: process.env.MYCLOUD_APP_PASSWORD });
+  } else {
+    if (!process.stdin.isTTY) throw new Error('set MYCLOUD_APP_PASSWORD to import non-interactively');
+    const accountPassword = await promptHidden(`MyCloud password for ${user}: `);
+    ({ client, revoke } = await connectWithAccountPassword({ server, user, accountPassword, label: `Import from ${os.hostname().replace(/\.local$/, '')}` }));
+  }
   await client.check();
+  process.on('SIGINT', () => revoke().finally(() => process.exit(130)));
   log(`☁️  Importing into ${client.base.origin} as ${user}`);
   const opts = { dryRun: !!values['dry-run'], limit: values.limit ? Number(values.limit) : undefined, to: values.to, photos: !!values.photos };
   let summary;
@@ -128,6 +141,7 @@ async function runImport(source, dir) {
     summary = await importFolder(client, dir, opts, log);
     log(`  ✓ ${summary.imported ?? 0} uploaded${summary.alreadyThere ? `, ${summary.alreadyThere} already there` : ''}`);
   }
+  await revoke(); // the import's own device password is thrown away when it's done
   log('\nDone. Safe to run again: it only brings what is new.');
   console.log(JSON.stringify(summary, null, 2));
 }

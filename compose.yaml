@@ -1,20 +1,39 @@
 # docker compose up -d   →  https://$MYCLOUD_DOMAIN with automatic Let's Encrypt certificates.
 # Create your account:    docker compose exec mycloud node mycloud.js adduser <name>
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  read_only: true
+  pids_limit: 256
+
 services:
   mycloud:
+    <<: *hardening
     build: .
-    restart: unless-stopped
+    environment:
+      MYCLOUD_PUBLIC_URL: https://${MYCLOUD_DOMAIN:?set MYCLOUD_DOMAIN, e.g. cloud.example.com}
     volumes:
       - mycloud-data:/data
+    tmpfs: [/tmp]
+    mem_limit: 1g
+    # Only reachable through Caddy; nothing is published on the host.
+    expose: ["8080"]
+
   caddy:
-    image: caddy:2
-    restart: unless-stopped
+    <<: *hardening
+    image: caddy:2@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
+    cap_add: [NET_BIND_SERVICE]
     ports: ["80:80", "443:443"]
-    environment:
-      MYCLOUD_DOMAIN: ${MYCLOUD_DOMAIN:?set MYCLOUD_DOMAIN, e.g. cloud.example.com}
+    # Caddy overwrites X-Forwarded-For with the real peer, which MyCloud (--trust-proxy) relies on.
     command: caddy reverse-proxy --from ${MYCLOUD_DOMAIN} --to mycloud:8080
     volumes:
-      - caddy:/data
+      - caddy-data:/data
+      - caddy-config:/config
+    tmpfs: [/tmp]
+    mem_limit: 256m
+
 volumes:
   mycloud-data:
-  caddy:
+  caddy-data:
+  caddy-config:
