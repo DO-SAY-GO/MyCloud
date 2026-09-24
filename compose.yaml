@@ -13,6 +13,7 @@ services:
     build: .
     environment:
       MYCLOUD_PUBLIC_URL: https://${MYCLOUD_DOMAIN:?set MYCLOUD_DOMAIN, e.g. cloud.example.com}
+      MYCLOUD_TRUST_PROXY: "1" # Caddy below is the one proxy in front
       MYCLOUD_THUMBNAILER_URL: http://thumbnailer:8081
     volumes:
       - mycloud-data:/data
@@ -27,8 +28,10 @@ services:
     <<: *hardening
     build: .
     command: ["thumbnailer", "--port", "8081"]
-    tmpfs: ["/tmp:size=5g"]
-    mem_limit: 768m
+    # One job at a time; inputs are capped at MYCLOUD_THUMBNAIL_MAX_MB (default 384). tmpfs counts against memory,
+    # so the input cap + converter limits (ImageMagick 256 MiB) stay below mem_limit.
+    tmpfs: ["/tmp:size=448m"]
+    mem_limit: 1g
     networks: [thumbs]
 
   caddy:

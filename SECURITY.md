@@ -18,7 +18,9 @@ In both cases:
 - Take **snapshots** (see Backups) and test a restore once.
 - Give family members their own accounts through invites. Never share the admin's account.
 
-Behind any reverse proxy, run with `--trust-proxy` (exactly one proxy in front) and `--public-url https://your.domain`.
+Behind any reverse proxy, run with `--trust-proxy` (exactly one proxy in front) and `--public-url https://your.domain`
+(`--trust-proxy` refuses to start without it). The Docker image doesn't trust proxies by itself; compose turns it on
+next to the Caddy it trusts.
 MyCloud then takes the client address from the entry *that proxy appended* to `X-Forwarded-For`, derives cookie
 security and every generated link from the configured URL rather than from request headers, and sends HSTS.
 
@@ -35,20 +37,44 @@ security and every generated link from the configured URL rather than from reque
 - **Uploaded content** is served under a `sandbox` Content-Security-Policy, so an uploaded HTML or SVG can't run as you.
 - **Paths** are validated per segment, and each user is confined to their own tree plus the shared Family space.
 - **Invite and reset links** are single-use, even under concurrent redemption, and expire (7 days / 24 hours).
-- **Share links** can't publish a whole Drive. Family content can only be published by the admin. Links expire after
-  7 days by default, folder links say plainly that they are recursive, and access is logged.
-- **Calendar links** pasted into Import can't reach private or loopback addresses. The check happens at connect time,
-  so DNS rebinding doesn't get around it.
-- **Uploads** are capped per file (`MYCLOUD_MAX_UPLOAD_GB`, default 50) and refused when free space would drop below a
-  reserve (`MYCLOUD_DISK_RESERVE_GB`, default 2). Optional per-user quota: `MYCLOUD_QUOTA_GB`. Silent connections are
-  dropped after two minutes, and partial uploads are cleaned up.
+- **Share links** can't publish a whole Drive. Family content can only be published by the admin, decided by where
+  the content *really* lives (after following links) both when a link is made and on every access, and WebDAV
+  refuses to copy the Family link. Links expire after 7 days by default, folder links say plainly that they are
+  recursive, and access is logged. This stops *accidental or direct* publishing; a member who can read Family
+  content can always download it and share a copy, and no server can prevent that.
+- **Calendar links** pasted into Import can't reach private or loopback addresses. Addresses are compared as bytes, so
+  every spelling counts (`::ffff:7f00:1`, IPv4-compatible, NAT64, 6to4). The check runs inside the connection's own
+  address lookup, before any byte is sent, so DNS rebinding doesn't get around it either.
+- **Uploads** hold a reservation while they stream. They are capped per file (`MYCLOUD_MAX_UPLOAD_GB`, default 50),
+  held to an optional per-user quota (`MYCLOUD_QUOTA_GB`; overwriting only counts the difference), and refused when
+  free space would drop below a reserve (`MYCLOUD_DISK_RESERVE_GB`, default 2). Checks count bytes still in flight
+  across all concurrent uploads, and apply byte by byte to chunked uploads. Silent connections are dropped after two
+  minutes, and partial uploads are cleaned up.
+- **Sign-in attempts** are rationed (2 in flight per address, 4 overall) and throttled per address and per account,
+  so parallel guessing is held to the same limits as sequential guessing.
 - **Thumbnails** (ImageMagick, ffmpeg) never run next to your data:
   - **Docker (compose):** in a separate `thumbnailer` container with no data volume, no internet (an `internal`
-    network shared only with MyCloud), a read-only root, no capabilities, and memory and process limits. It receives
-    one file per request and returns a JPEG.
-  - **Directly on a host:** in an OS sandbox: `sandbox-exec` on macOS, `bubblewrap` on Linux. No network, no view of
-    the MyCloud data, home directories or other temp files (except the single input), and writes only to a scratch
-    directory.
+    network shared only with MyCloud), a read-only root, no capabilities, and memory and process limits. It runs
+    **one job at a time**, taking the slot before it accepts the upload, so two people's files are never on it
+    together. Inputs are capped (`MYCLOUD_THUMBNAIL_MAX_MB`, default 384) below its memory limit.
+  - **Directly on a host:** in an OS sandbox: `sandbox-exec` on macOS, `bubblewrap` on Linux. The sandbox sees the
+    system's programs and libraries, the single input and a scratch directory. `/tmp`, `/var`, `/home`, `/root`,
+    `/run`, `/mnt`, `/media`, `/srv`, `/sys`, the data directory and the TLS key directories are hidden, and there is
+    no network.
+  - MyCloud accepts only a genuine JPEG (by its first bytes) under 2 MB back from any converter.
+  - **Ubuntu 23.10+ (incl. 24.04)** blocks the user namespaces bubblewrap needs by default, so MyCloud will report
+    "thumbnails disabled". Allow bubblewrap alone, rather than lifting the restriction system-wide, with an AppArmor
+    profile, then restart MyCloud:
+    ```
+    sudo tee /etc/apparmor.d/bwrap <<'EOF'
+    abi <abi/4.0>,
+    include <tunables/global>
+    profile bwrap /usr/bin/bwrap flags=(unconfined) {
+      userns,
+    }
+    EOF
+    sudo apparmor_parser -r /etc/apparmor.d/bwrap
+    ```
   - With neither available, thumbnails are **off** (`MYCLOUD_THUMBNAILS=unsafe` overrides). Only small JPEG/PNG/WebP
     originals stand in; HEIC, video and large files show a placeholder.
 - **Deletes** from the web, Finder or the Files app go to **Recently Deleted** for 30 days. Only the admin can
@@ -83,5 +109,7 @@ Test step 3 once, before you need it.
 - **Data at rest is not encrypted by MyCloud.** Use disk encryption. Anyone who controls the running server can read
   everything.
 - **Share links** have no password option yet.
+- **Alpine packages in the image are not version-pinned** (the base image is pinned by digest). Builds are hardened,
+  but not bit-for-bit reproducible over time.
 - **Family members have write access to all Family content.** Recently Deleted and the activity log make mistakes
   recoverable and visible, but don't prevent them.

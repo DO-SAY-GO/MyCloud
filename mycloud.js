@@ -130,27 +130,30 @@ async function runImport(source, dir) {
     const accountPassword = await promptHidden(`MyCloud password for ${user}: `);
     ({ client, revoke } = await connectWithAccountPassword({ server, user, accountPassword, label: `Import from ${os.hostname().replace(/\.local$/, '')}` }));
   }
-  await client.check();
   process.on('SIGINT', () => revoke().finally(() => process.exit(130)));
-  log(`☁️  Importing into ${client.base.origin} as ${user}`);
-  const opts = { dryRun: !!values['dry-run'], limit: values.limit ? Number(values.limit) : undefined, to: values.to, photos: !!values.photos };
   let summary;
-  if (source === 'mac') {
-    const only = values.only ? values.only.split(',').map((x) => x.trim()) : MAC_SOURCES;
-    const unknown = only.filter((x) => !MAC_SOURCES.includes(x));
-    if (unknown.length) throw new Error(`unknown --only value(s): ${unknown.join(', ')} (choose from ${MAC_SOURCES.join(', ')})`);
-    log('   macOS may ask to let your terminal control each app. Click OK.');
-    summary = await importMac(client, { only, ...opts }, log);
-  } else if (source === 'iphone') {
-    summary = await importIphone(client, opts, log);
-    if (!opts.dryRun) log(`  ✓ ${summary.imported ?? 0} imported${summary.skipped?.length ? `, ${summary.skipped.length} skipped` : ''}`);
-  } else {
-    summary = await importFolder(client, dir, opts, log);
-    if (!opts.dryRun) log(`  ✓ ${summary.imported ?? 0} uploaded${summary.alreadyThere ? `, ${summary.alreadyThere} already there` : ''}`);
+  try {
+    await client.check();
+    log(`☁️  Importing into ${client.base.origin} as ${user}`);
+    const opts = { dryRun: !!values['dry-run'], limit: values.limit ? Number(values.limit) : undefined, to: values.to, photos: !!values.photos };
+    if (source === 'mac') {
+      const only = values.only ? values.only.split(',').map((x) => x.trim()) : MAC_SOURCES;
+      const unknown = only.filter((x) => !MAC_SOURCES.includes(x));
+      if (unknown.length) throw new Error(`unknown --only value(s): ${unknown.join(', ')} (choose from ${MAC_SOURCES.join(', ')})`);
+      log('   macOS may ask to let your terminal control each app. Click OK.');
+      summary = await importMac(client, { only, ...opts }, log);
+    } else if (source === 'iphone') {
+      summary = await importIphone(client, opts, log);
+      if (!opts.dryRun) log(`  ✓ ${summary.imported ?? 0} imported${summary.skipped?.length ? `, ${summary.skipped.length} skipped` : ''}`);
+    } else {
+      summary = await importFolder(client, dir, opts, log);
+      if (!opts.dryRun) log(`  ✓ ${summary.imported ?? 0} uploaded${summary.alreadyThere ? `, ${summary.alreadyThere} already there` : ''}`);
+    }
+    if (opts.dryRun) log('\nDry run: nothing was copied. Run the same command without --dry-run to import.');
+    else log('\nDone. Safe to run again: it only brings what is new.');
+  } finally {
+    await revoke(); // the import's own device password never outlives the import, even on failure
   }
-  await revoke(); // the import's own device password is thrown away when it's done
-  if (opts.dryRun) log('\nDry run: nothing was copied. Run the same command without --dry-run to import.');
-  else log('\nDone. Safe to run again: it only brings what is new.');
   console.log(JSON.stringify(summary, null, 2));
 }
 
