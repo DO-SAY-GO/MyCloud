@@ -24,6 +24,17 @@ final class Importer: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate,
     var camera: ICCameraDevice?
     var queue: [ICCameraFile] = []
     var current: ICCameraFile?
+    var ready = false
+    var lockNoticePending = false
+
+    // Phones report "locked" for a moment while every session opens; only speak up if it lasts.
+    func noteLocked() {
+        guard !lockNoticePending, !ready else { return }
+        lockNoticePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if !self.ready { emit(["event": "locked", "message": "Unlock your iPhone (and tap Trust if it asks)…"]) }
+        }
+    }
 
     init(mode: String, dir: URL?, wanted: Set<String>) {
         self.mode = mode
@@ -62,15 +73,16 @@ final class Importer: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate,
         // A locked or not-yet-trusted phone refuses the session: keep asking for two minutes.
         openAttempts += 1
         if openAttempts > 40 { fail("Could not open the iPhone: \(error.localizedDescription)") }
-        if openAttempts == 1 { emit(["event": "locked", "message": "Unlock your iPhone and tap Trust if asked…"]) }
+        noteLocked()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { (device as? ICCameraDevice)?.requestOpenSession() }
     }
     func device(_ device: ICDevice, didCloseSessionWithError error: Error?) {}
     func didRemove(_ device: ICDevice) { fail("The iPhone was disconnected.") }
-    func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) { emit(["event": "locked", "message": "Unlock your iPhone to continue."]) }
+    func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) { noteLocked() }
     func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {}
 
     func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
+        ready = true
         let files = (device.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
         if mode == "list" {
             for f in files {
