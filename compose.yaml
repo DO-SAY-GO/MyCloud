@@ -1,0 +1,20 @@
+# docker compose up -d   →  https://$MYCLOUD_DOMAIN with automatic Let's Encrypt certificates.
+# Create your account:    docker compose exec mycloud node mycloud.js adduser <name>
+services:
+  mycloud:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - mycloud-data:/data
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      MYCLOUD_DOMAIN: ${MYCLOUD_DOMAIN:?set MYCLOUD_DOMAIN, e.g. cloud.example.com}
+    command: caddy reverse-proxy --from ${MYCLOUD_DOMAIN} --to mycloud:8080
+    volumes:
+      - caddy:/data
+volumes:
+  mycloud-data:
+  caddy:

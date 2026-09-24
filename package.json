@@ -1,0 +1,15 @@
+{
+  "name": "mycloud",
+  "version": "0.1.0",
+  "description": "Your own iCloud. Drive, Photos, Notes, Calendar and Contacts on hardware you control — zero dependencies.",
+  "type": "module",
+  "bin": { "mycloud": "./mycloud.js" },
+  "scripts": {
+    "start": "node mycloud.js serve",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=20" },
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/DO-SAY-GO/MyCloud.git" },
+  "keywords": ["icloud", "self-hosted", "caldav", "carddav", "webdav", "photos", "cloud"]
+}

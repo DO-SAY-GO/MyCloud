@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>MyCloud</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <main id="login" class="login" hidden>
+    <form id="login-form" class="login-card">
+      <img src="icon.svg" alt="" class="login-logo">
+      <h1>MyCloud</h1>
+      <p class="muted">Your cloud. Your hardware.</p>
+      <input name="username" autocomplete="username" placeholder="Username" required autocapitalize="off">
+      <input name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+      <button class="primary">Sign in</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </main>
+
+  <div id="app" class="app" hidden>
+    <nav class="sidebar">
+      <div class="brand"><img src="icon.svg" alt=""> MyCloud</div>
+      <a href="#drive" data-view="drive"><span>🗂️</span> Drive</a>
+      <a href="#photos" data-view="photos"><span>🌄</span> Photos</a>
+      <a href="#notes" data-view="notes"><span>📝</span> Notes</a>
+      <a href="#calendar" data-view="calendar"><span>📅</span> Calendar</a>
+      <a href="#contacts" data-view="contacts"><span>👤</span> Contacts</a>
+      <a href="#settings" data-view="settings"><span>⚙️</span> Settings</a>
+      <div class="sidebar-foot muted" id="whoami"></div>
+    </nav>
+    <section id="view" class="view"></section>
+  </div>
+
+  <dialog id="dialog"><form method="dialog" id="dialog-form"></form></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <input type="file" id="file-input" multiple hidden>
+</body>
+</html>
