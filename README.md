@@ -69,11 +69,58 @@ docker compose exec mycloud node mycloud.js adduser you
 
 Caddy fetches a Let's Encrypt certificate for your domain. Point the domain's DNS at the box first.
 
-### Other ways to put it online
+## Hosting options
 
-- **Tailscale**: run `mycloud serve` and use `tailscale serve 8080`. You get HTTPS and access only from your own devices.
-- **Your own reverse proxy**: proxy to `:8080` and pass `--trust-proxy` so MyCloud sees the real client IP (used for login throttling).
-- **Native TLS**: `mycloud serve --cert fullchain.pem --key privkey.pem`.
+MyCloud wants a machine with a real disk. Pick based on who needs to reach it:
+
+| Option | Best for | Uploads | Who can see your traffic | Effort |
+|---|---|---|---|---|
+| **Home box + Tailscale** ⭐ | Just you and your family's devices | Unlimited | Nobody (end-to-end WireGuard) | Lowest |
+| **VPS + Caddy** | Public share links, no hardware at home | Unlimited | Nobody (TLS ends on your box) | Low |
+| **Home box + Cloudflare Tunnel** | Public access without opening ports | **100 MB per file** on Free/Pro | Cloudflare (TLS ends at their edge) | Low |
+| Cloudflare Workers / R2 | Not supported | — | — | A rewrite |
+
+### Recommended: a box you own + Tailscale
+
+Use an old laptop, a mini-PC, a Raspberry Pi 5 or a NAS that runs Docker. Your photos stay in your house, and storage costs you one hard drive.
+
+```bash
+./mycloud.js serve --host 127.0.0.1
+tailscale serve --bg 8080        # https://<machine>.<tailnet>.ts.net
+```
+
+Install Tailscale on your phone and laptop, then use the `ts.net` address as the server in Settings. You don't open any ports, you don't need a domain, and there's no upload limit. It's reachable only from your own devices.
+
+### Public: a VPS + Caddy
+
+A $4–6/month VPS (Hetzner, DigitalOcean, Vultr…) with a block-storage volume for photos. Point a domain at it, then:
+
+```bash
+MYCLOUD_DOMAIN=cloud.example.com docker compose up -d
+```
+
+Caddy gets a certificate on its own. TLS terminates on your box, so no third party sees your data in transit, and big video uploads work. The tradeoff: your data sits on someone else's disk, so encrypt the volume if that matters to you.
+
+### Cloudflare Tunnel (with caveats)
+
+```bash
+cloudflared tunnel --url http://localhost:8080   # quick test; use a named tunnel for real
+```
+
+This is handy for public share links from a home box without port forwarding. But:
+
+- **The 100 MB request cap** on Cloudflare's Free and Pro plans breaks uploads of long iPhone videos.
+- **Cloudflare terminates TLS**, so your calendar, contacts and photos pass through their edge unencrypted.
+
+A good combination: keep sync on Tailscale and expose only `/s/` share links through the tunnel.
+
+### Why not run it entirely on Cloudflare?
+
+Workers have no filesystem. Running MyCloud on Workers would mean moving storage into R2 plus a database, which gives up the "plain files you own" design. HEIC and video thumbnails also don't fit Workers' CPU limits. A Workers edition might happen one day, but it would be a different product.
+
+### Any other reverse proxy
+
+Proxy to `:8080` and pass `--trust-proxy`, so login throttling sees real client IPs. For native TLS without a proxy: `mycloud serve --cert fullchain.pem --key privkey.pem`.
 
 Use HTTPS before connecting phones over the internet. DAV clients send credentials on every request.
 
