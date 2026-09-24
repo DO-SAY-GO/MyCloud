@@ -49,9 +49,15 @@ security and every generated link from the configured URL rather than from reque
   CalDAV/CardDAV writes, `.ics`/`.vcf` imports, new events and contacts, WebDAV COPY (sized recursively), moves into
   another budget, new folders and collections, collection properties (PROPPATCH), files created by WebDAV LOCK, and
   the thumbnail cache.
-  - Server bookkeeping (collection sync logs and properties, trash records) belongs to no quota. It's capped (sync
-    logs at 2,000 entries per collection, properties at 64 KB), and every write of it is still reserved against the
-    disk and inode floors. Removals credit their budget immediately, so cached usage always matches a recount.
+  - Server bookkeeping (collection sync logs and properties, trash records) belongs to no quota. It's identified by
+    location (only those files inside real calendar and address-book folders, and trash records), never by name, so a
+    Drive file called `.sync.json` is content like any other. It's capped (sync logs at 2,000 entries per collection,
+    properties at 64 KB), and every write of it is still reserved against the disk and inode floors. Removals credit
+    their budget immediately, and each reservation is settled against what is really on disk at commit time, so
+    cached usage always matches a recount, even under concurrent writes to the same name.
+  - Calendar and contact changes are transactions: content and sync log are reserved together, staged, then swapped
+    in. A refused reservation or failed write leaves both as they were. Imports are all or nothing, and moving an
+    object between calendars updates both logs and the object together.
   - Every filesystem entry is charged a 4 KB block on top of its content, and each budget has a file-and-folder limit
     (`MYCLOUD_MAX_FILES`, default 1,000,000) plus a free-inode reserve (`MYCLOUD_INODE_RESERVE`, default 10,000), so
     empty files and metadata can't exhaust the filesystem.

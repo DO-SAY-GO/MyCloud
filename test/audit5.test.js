@@ -86,7 +86,9 @@ test('bookkeeping: sync-log, property and trash writes are reserved against the 
     await assert.rejects(store.patchProps(coll, { '{urn:z}big': 'x'.repeat(40 * 1024) }), /out of space/);
     // Sync-log growth: fill the log until its rewrite no longer fits, then it must be refused, not written.
     let refused = null;
-    for (let i = 0; i < 400 && !refused; i++) await store.recordChange(coll, `n${'x'.repeat(40)}${i}.vcf`).catch((e) => { refused = e; });
+    for (let i = 0; i < 400 && !refused; i++) {
+      await store.writeItem(coll, `n${'x'.repeat(40)}${i}.vcf`, 'BEGIN:VCARD\r\nEND:VCARD\r\n').catch((e) => { refused = e; });
+    }
     assert.match(String(refused), /out of space/);
     // Trash records reserve their folder and meta.json too.
     const f = path.join(store.filesRoot('q'), 'Documents', 't.txt');
