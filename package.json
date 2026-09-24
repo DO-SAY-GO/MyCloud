@@ -1,6 +1,6 @@
 {
   "name": "mycloud",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Your own iCloud. Drive, Photos, Notes, Calendar and Contacts on hardware you control — zero dependencies.",
   "type": "module",
   "bin": { "mycloud": "./mycloud.js" },
