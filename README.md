@@ -11,6 +11,32 @@ npx github:DO-SAY-GO/MyCloud serve
 
 Open http://localhost:8080 and you're in.
 
+## Why not Nextcloud + Immich?
+
+They're great, and they do far more than MyCloud does. But look at what "self-hosting iCloud" actually means today:
+
+| | Nextcloud + Immich | MyCloud |
+|---|---|---|
+| Things to run | PHP app, web server, database, Redis, cron, Immich server, ML container, a second database | **One process** |
+| Dependencies | Hundreds of packages across two stacks | **Zero.** Node's standard library only |
+| Where your data lives | Files plus database rows that have to stay in sync | **Plain files.** `.ics`, `.vcf`, `.md` and your photos, untouched |
+| Backup | Dump both databases, snapshot the volumes, hope they match | `rsync -a ~/.mycloud elsewhere:` |
+| Upgrading | Schema migrations, app compatibility, major-version steps | Replace the files and restart |
+| Leaving | Export tools | You already have your files |
+| Reading the code | Hundreds of thousands of lines | **~2,500 lines.** One afternoon, by you or your AI |
+
+**The cost of self-hosting was never the server. It was the sysadmin.** Compute is getting almost free. A spare mini-PC, a $4 VPS or the idle CPU in the box under your TV can run a personal cloud. What stays expensive is attention: the 2 a.m. database migration, the container that won't start after an update, not knowing what's in the software holding your family photos.
+
+MyCloud is built for that world:
+
+- **Small enough to trust.** You (or an agent you trust) can read every line that touches your data. Nobody can audit Nextcloud before breakfast. You can audit MyCloud.
+- **Boring on purpose.** No database, no background jobs, no plugins. There's nothing to corrupt, drift or migrate.
+- **Native, not another app.** Your iPhone already has a Calendar, Contacts and Files app. MyCloud feeds them over the open protocols iCloud itself uses, so there's nothing to install on your phone.
+- **Your files outlive the software.** Stop running MyCloud tomorrow and you still have a folder of standard calendar, contact, note and photo files that every OS on earth can open.
+- **One per person, not one per company.** It's designed to run a thousand times over, once for each family, not as one big instance for thousands of users.
+
+**Where the others win (honestly):** Immich has face recognition, smart search and a background auto-upload app. Nextcloud has an office suite, collaboration and a huge app store. If you need those, run them. If you want *your iCloud back* with the least possible machinery between you and your files, run this.
+
 ## What you get
 
 | | Web app | Native sync |
