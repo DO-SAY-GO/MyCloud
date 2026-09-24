@@ -30,6 +30,7 @@ Bring your stuff (run on the machine that has it; talks to your server with an a
 
 Environment: MYCLOUD_DATA, MYCLOUD_PORT, MYCLOUD_HOST, MYCLOUD_PASSWORD (non-interactive adduser/passwd),
              MYCLOUD_PUBLIC_URL, MYCLOUD_TRUST_PROXY=1, MYCLOUD_MAX_UPLOAD_GB, MYCLOUD_DISK_RESERVE_GB, MYCLOUD_QUOTA_GB, MYCLOUD_FAMILY_QUOTA_GB,
+             MYCLOUD_MAX_FILES, MYCLOUD_INODE_RESERVE,
              MYCLOUD_THUMBNAILS=auto|off|unsafe, MYCLOUD_SIGN_CERT/KEY/CHAIN,
              MYCLOUD_SERVER, MYCLOUD_USER, MYCLOUD_APP_PASSWORD (non-interactive import)
 Default data dir: ~/.mycloud`;

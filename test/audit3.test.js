@@ -5,75 +5,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createServer } from '../lib/server.js';
-import { Auth } from '../lib/auth.js';
 import { Store } from '../lib/store.js';
-import { Limits, SYSTEM } from '../lib/limits.js';
+import { Limits, SYSTEM, ENTRY_COST } from '../lib/limits.js';
+import { setup, ics, vcf, chunked, GB } from './storage-helpers.js';
 
-const quiet = { error() {} };
-const GB = 1024 ** 3;
-
-async function bytesUnder(dir, skip) {
-  let n = 0;
-  for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
-    const p = path.join(dir, e.name);
-    if (p === skip) continue;
-    if (e.isDirectory()) n += await bytesUnder(p, skip);
-    else if (e.isFile()) n += (await fs.stat(p)).size;
-  }
-  return n;
-}
-
-// A server where user "q" (the admin) has `headroom` bytes of quota left, and Family `familyHeadroom`.
-async function setup({ headroom = Infinity, familyHeadroom = Infinity, reserveBelowFree } = {}) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mycloud-audit3-'));
-  const a = new Auth(dir);
-  await a.load();
-  await a.setPassword('q', 'q-password-12', { create: true });
-  const app = (await a.createAppPassword('q', 't')).password;
-  const store = new Store(dir);
-  await store.ensureUser('q');
-  const userBase = await bytesUnder(store.userRoot('q'), store.cacheRoot('q'));
-  const familyBase = await bytesUnder(store.familyRoot());
-  const env = { MYCLOUD_THUMBNAILS: 'off' };
-  if (headroom !== Infinity) env.MYCLOUD_QUOTA_GB = String((userBase + headroom) / GB);
-  if (familyHeadroom !== Infinity) env.MYCLOUD_FAMILY_QUOTA_GB = String((familyBase + familyHeadroom) / GB);
-  if (reserveBelowFree !== undefined) {
-    const s = await fs.statfs(dir);
-    env.MYCLOUD_DISK_RESERVE_GB = String((s.bavail * s.bsize - reserveBelowFree) / GB);
-  }
-  const { server } = await createServer({ dataDir: dir, log: quiet, env });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'q', password: 'q-password-12' }) });
-  const cookie = login.headers.get('set-cookie').split(';')[0];
-  const auth = 'Basic ' + Buffer.from(`q:${app}`).toString('base64');
-  return {
-    dir, store, base,
-    api: (method, p, body, headers = {}) => fetch(`${base}/api${p}`, { method, headers: { 'X-MyCloud': '1', cookie, ...headers }, body, duplex: 'half' }),
-    dav: (method, p, body, headers = {}) => fetch(`${base}${p}`, { method, headers: { Authorization: auth, ...headers }, body, duplex: 'half' }),
-    userBytes: () => bytesUnder(store.userRoot('q'), store.cacheRoot('q')),
-    userBase,
-    close: async () => { server.close(); await fs.rm(dir, { recursive: true, force: true }); },
-  };
-}
-
-const ics = (uid, pad = 0) => `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:${uid}\r\nDTSTART:20260924T100000Z\r\nSUMMARY:x\r\nDESCRIPTION:${'x'.repeat(pad)}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n`;
-const vcf = (uid, pad = 0) => `BEGIN:VCARD\r\nVERSION:3.0\r\nUID:${uid}\r\nFN:Pat\r\nNOTE:${'n'.repeat(pad)}\r\nEND:VCARD\r\n`;
-const chunked = (bytes, pieces = 4) => new ReadableStream({
-  start(ctl) {
-    for (let i = 0; i < pieces; i++) ctl.enqueue(new Uint8Array(bytes / pieces));
-    ctl.close();
-  },
-});
-
+// Headroom includes one filesystem-entry charge (ENTRY_COST) per file a test means to allow.
 test('storage: CalDAV and CardDAV writes are held to the quota', async () => {
-  const s = await setup({ headroom: 1210 });
+  const s = await setup({ headroom: 1210 + ENTRY_COST });
   try {
     assert.equal((await s.dav('PUT', '/dav/calendars/q/personal/big.ics', ics('big', 2000))).status, 507);
     assert.equal((await s.dav('PUT', '/dav/addressbooks/q/contacts/big.vcf', vcf('big', 2000))).status, 507);
     assert.equal((await s.dav('PUT', '/dav/calendars/q/personal/ok.ics', ics('ok', 100))).status, 201);
-    assert.ok((await s.userBytes()) <= s.userBase + 1210);
+    assert.ok((await s.userBytes()) <= s.userBase + 1210 + ENTRY_COST);
   } finally {
     await s.close();
   }
@@ -94,7 +37,7 @@ test('storage: the auditor probe (a ~2 KB contact import with 1,210 bytes left) 
 });
 
 test('storage: the auditor probe (WebDAV COPY past the quota) is refused, recursive copies too', async () => {
-  const s = await setup({ headroom: 1500 });
+  const s = await setup({ headroom: 1500 + ENTRY_COST });
   try {
     assert.equal((await s.dav('PUT', '/dav/files/q/Documents/a.bin', new Uint8Array(1000))).status, 201);
     const copy = await s.dav('COPY', '/dav/files/q/Documents/a.bin', null, { Destination: `${s.base}/dav/files/q/Documents/b.bin` });
@@ -103,14 +46,14 @@ test('storage: the auditor probe (WebDAV COPY past the quota) is refused, recurs
     const tree = await s.dav('COPY', '/dav/files/q/Documents/', null, { Destination: `${s.base}/dav/files/q/Documents2/` });
     assert.equal(tree.status, 507);
     assert.equal(await fs.stat(path.join(s.dir, 'users/q/files/Documents2')).catch(() => null), null);
-    assert.ok((await s.userBytes()) <= s.userBase + 1500);
+    assert.ok((await s.userBytes()) <= s.userBase + 1500 + ENTRY_COST);
   } finally {
     await s.close();
   }
 });
 
 test('storage: Family has its own budget, and moving out of it bills the destination', async () => {
-  const s = await setup({ headroom: 500, familyHeadroom: 1500 });
+  const s = await setup({ headroom: 500, familyHeadroom: 1500 + ENTRY_COST });
   try {
     // A full personal quota doesn't block the shared space, and vice versa.
     assert.equal((await s.api('PUT', '/files/raw?path=Family/f.bin', new Uint8Array(1000))).status, 200);
@@ -126,9 +69,11 @@ test('storage: Family has its own budget, and moving out of it bills the destina
 });
 
 test('storage: mixed concurrent writes (Drive upload, WebDAV COPY, import) cannot jointly exceed the quota', async () => {
-  const s = await setup({ headroom: 2600 });
+  // Room for the seed plus exactly one more ~1 KB write; any two of the racing writes together don't fit.
+  const room = 1000 + ENTRY_COST + 1600 + ENTRY_COST;
+  const s = await setup({ headroom: room });
   try {
-    assert.equal((await s.dav('PUT', '/dav/files/q/Documents/seed.bin', new Uint8Array(1000))).status, 201); // 1600 left
+    assert.equal((await s.dav('PUT', '/dav/files/q/Documents/seed.bin', new Uint8Array(1000))).status, 201);
     const results = await Promise.all([
       s.api('PUT', '/files/raw?path=Documents/up.bin', chunked(1000)),
       s.dav('COPY', '/dav/files/q/Documents/seed.bin', null, { Destination: `${s.base}/dav/files/q/Documents/copy.bin` }),
@@ -136,8 +81,8 @@ test('storage: mixed concurrent writes (Drive upload, WebDAV COPY, import) canno
       s.dav('PUT', '/dav/calendars/q/personal/race.ics', ics('race', 900)),
     ]);
     const statuses = results.map((r) => r.status);
-    assert.ok(statuses.filter((x) => x === 507).length >= 2, `statuses ${statuses}`);
-    assert.ok((await s.userBytes()) <= s.userBase + 2600, `used ${await s.userBytes()} of ${s.userBase + 2600}`);
+    assert.equal(statuses.filter((x) => x === 507).length, 3, `statuses ${statuses}`);
+    assert.ok((await s.userBytes()) <= s.userBase + room, `used ${await s.userBytes()} of ${s.userBase + room}`);
   } finally {
     await s.close();
   }

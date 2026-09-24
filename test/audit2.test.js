@@ -12,6 +12,7 @@ import { createServer } from '../lib/server.js';
 import { Auth } from '../lib/auth.js';
 import { Thumbnailer, thumbnailService } from '../lib/thumbs.js';
 import { connectWithAccountPassword } from '../lib/import/client.js';
+import { accounted, ENTRY_COST } from '../lib/limits.js';
 
 const run = promisify(execFile);
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0, 1, 0xff, 0xd9]);
@@ -83,15 +84,7 @@ test('family: shares are authorized by where content really lives, at creation a
 });
 
 // ---- 2. Quotas -----------------------------------------------------------------------------------------------------
-async function userBytes(dir) {
-  let n = 0;
-  for (const e of await fs.readdir(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) n += await userBytes(p);
-    else if (e.isFile()) n += (await fs.stat(p)).size;
-  }
-  return n;
-}
+const userBytes = async (dir) => (await accounted(dir, path.join(dir, 'cache'))).bytes;
 
 async function quotaServer(extraBytes) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mycloud-quota-'));
@@ -119,8 +112,9 @@ const chunked = (bytes, pieces = 2, delay = 0) => new ReadableStream({
   },
 });
 
+// Headroom includes one filesystem-entry charge (ENTRY_COST) per file a test means to allow.
 test('quota: a chunked upload over quota is stopped and leaves nothing behind', async () => {
-  const q = await quotaServer(1210);
+  const q = await quotaServer(1210 + ENTRY_COST);
   try {
     const r = await q.put('Documents/big.bin', chunked(2048));
     assert.equal(r.status, 507);
@@ -133,7 +127,7 @@ test('quota: a chunked upload over quota is stopped and leaves nothing behind', 
 });
 
 test('quota: concurrent uploads cannot jointly exceed it (declared and chunked)', async () => {
-  const q = await quotaServer(1210);
+  const q = await quotaServer(1210 + ENTRY_COST);
   try {
     const declared = await Promise.all([1, 2].map((i) => q.put(`Documents/d${i}.bin`, new Uint8Array(800), { 'Content-Length': '800' })));
     assert.deepEqual(declared.map((r) => r.status).sort(), [200, 507]);
@@ -148,7 +142,7 @@ test('quota: concurrent uploads cannot jointly exceed it (declared and chunked)'
 });
 
 test('quota: overwriting a file only counts the difference', async () => {
-  const q = await quotaServer(1210);
+  const q = await quotaServer(1210 + ENTRY_COST);
   try {
     assert.equal((await q.put('Documents/f.bin', new Uint8Array(1000))).status, 200);
     assert.equal((await q.put('Documents/f.bin', new Uint8Array(1100))).status, 200); // +100, still under

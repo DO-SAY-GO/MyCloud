@@ -47,7 +47,16 @@ security and every generated link from the configured URL rather than from reque
   address lookup, before any byte is sent, so DNS rebinding doesn't get around it either.
 - **Storage admission:** every operation that grows storage passes one gate before writing: Drive and WebDAV uploads,
   CalDAV/CardDAV writes, `.ics`/`.vcf` imports, new events and contacts, WebDAV COPY (sized recursively), moves into
-  another budget, new folders and collections, and the thumbnail cache.
+  another budget, new folders and collections, collection properties (PROPPATCH), files created by WebDAV LOCK, and
+  the thumbnail cache.
+  - Every filesystem entry is charged a 4 KB block on top of its content, and each budget has a file-and-folder limit
+    (`MYCLOUD_MAX_FILES`, default 1,000,000) plus a free-inode reserve (`MYCLOUD_INODE_RESERVE`, default 10,000), so
+    empty files and metadata can't exhaust the filesystem.
+  - Disk space is reserved at an operation's *peak*: a replacement needs room for its whole new copy, because it is
+    written in full beside the original before the swap. Only the quota is charged the net difference.
+  - A copy or move is admitted and fully staged before anything at the destination is touched; the swap is a single
+    rename. A refused or failed overwrite leaves the destination as it was, and a replaced Drive item goes to
+    Recently Deleted.
   - Budgets: each user (`MYCLOUD_QUOTA_GB`), the shared Family space (`MYCLOUD_FAMILY_QUOTA_GB`, defaulting to the user
     quota so Family isn't a way around it), and a system budget for thumbnails (nobody's quota, still bound by the
     disk reserve). Where a write is billed is decided by where it really lands, with links followed.
