@@ -140,7 +140,8 @@ test('caldav: MKCALENDAR + PROPPATCH colour', async () => {
   const pp = await dav('PROPPATCH', '/dav/calendars/alice/work/', '<d:propertyupdate xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/"><d:set><d:prop><ical:calendar-color>#ff9500FF</ical:calendar-color></d:prop></d:set></d:propertyupdate>');
   assert.equal(pp.status, 207);
   const { calendars } = await (await api('GET', '/calendars')).json();
-  assert.deepEqual(calendars.find((c) => c.id === 'work'), { id: 'work', name: 'Work', color: '#ff9500' });
+  const work = calendars.find((c) => c.id === 'work');
+  assert.deepEqual([work.name, work.color, work.shared], ['Work', '#ff9500', false]);
 });
 
 test('carddav + web API agree', async () => {
@@ -185,4 +186,112 @@ test('ical/vcard round-trips', () => {
   const c = parseContact('BEGIN:VCARD\r\nVERSION:3.0\r\nN:Doe;Jane;;;\r\nitem1.EMAIL;type=INTERNET:j@x.io\r\nEND:VCARD');
   assert.equal(c.name, 'Jane Doe');
   assert.deepEqual(c.emails, ['j@x.io']);
+});
+
+const bobLogin = async () => {
+  const r = await fetch(base + '/api/login', { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'bob', password: 'bob-password-123' }) });
+  return r.headers.get('set-cookie').split(';')[0];
+};
+
+test('family: invite link creates an account; only the admin can invite', async () => {
+  const me = await (await api('GET', '/me')).json();
+  assert.equal(me.admin, true); // alice was created first
+  const bob = await bobLogin();
+  const denied = await api('POST', '/family/invites', { kind: 'join' }, { cookie: bob });
+  assert.equal(denied.status, 403);
+
+  const { url } = await (await api('POST', '/family/invites', { kind: 'join' })).json();
+  const token = url.split('/').pop();
+  assert.equal((await fetch(base + url)).status, 200); // the web app serves the join page
+  const info = await (await fetch(`${base}/api/join?token=${token}`)).json();
+  assert.equal(info.kind, 'join');
+  const join = await fetch(base + '/api/join', { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ token, username: 'carol', password: 'carol-password-1' }) });
+  assert.equal(join.status, 200);
+  assert.match(join.headers.get('set-cookie'), /mycloud_session=/);
+  const again = await fetch(base + '/api/join', { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ token, username: 'dave', password: 'dave-password-1' }) });
+  assert.equal(again.status, 400); // single use
+  const { members } = await (await api('GET', '/family')).json();
+  assert.deepEqual(members.map((m) => m.name).sort(), ['alice', 'bob', 'carol']);
+});
+
+test('family: reset link sets a new password', async () => {
+  const { url } = await (await api('POST', '/family/invites', { kind: 'reset', username: 'carol' })).json();
+  const token = url.split('/').pop();
+  const r = await fetch(base + '/api/join', { method: 'POST', headers: { 'X-MyCloud': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ token, password: 'carol-new-password' }) });
+  assert.equal((await r.json()).user, 'carol');
+  const basicCarol = 'Basic ' + Buffer.from('carol:carol-new-password').toString('base64');
+  assert.equal((await fetch(base + '/dav/principals/carol/', { method: 'PROPFIND', headers: { Authorization: basicCarol, Depth: '0' } })).status, 207);
+});
+
+test('family: shared folder and calendar are visible to every member', async () => {
+  const bob = await bobLogin();
+  assert.equal((await api('PUT', '/files/raw?path=Family/Photos/beach.jpg', 'sand')).status, 200);
+  const r = await api('GET', '/files/raw?path=Family/Photos/beach.jpg', undefined, { cookie: bob });
+  assert.equal(await r.text(), 'sand');
+  const { photos } = await (await api('GET', '/photos', undefined, { cookie: bob })).json();
+  assert.ok(photos.some((p) => p.path === 'Family/Photos/beach.jpg'));
+
+  const ics = buildEvent({ uid: 'fam1', title: 'Grandma visits', start: '2026-12-24', allDay: true });
+  assert.equal((await dav('PUT', '/dav/calendars/alice/family/fam1.ics', ics)).status, 201);
+  const basicBob = 'Basic ' + Buffer.from('bob:bob-password-123').toString('base64');
+  const list = await (await fetch(base + '/dav/calendars/bob/', { method: 'PROPFIND', headers: { Authorization: basicBob, Depth: '1' } })).text();
+  assert.match(list, /\/dav\/calendars\/bob\/family\//);
+  const got = await fetch(base + '/dav/calendars/bob/family/fam1.ics', { headers: { Authorization: basicBob } });
+  assert.match(await got.text(), /Grandma visits/);
+
+  // Nobody can delete or rename the shared space itself.
+  assert.equal((await api('DELETE', '/files?path=Family')).status, 403);
+  assert.equal((await dav('DELETE', '/dav/files/alice/Family/')).status, 403);
+  assert.equal((await dav('DELETE', '/dav/calendars/alice/family/')).status, 403);
+  assert.equal((await api('POST', '/files/move', { from: 'Family', to: 'Mine' })).status, 403);
+});
+
+test('import: a multi-event .ics becomes one object per UID, with its timezone', async () => {
+  const ics = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0',
+    'BEGIN:VTIMEZONE', 'TZID:Europe/Paris', 'BEGIN:STANDARD', 'DTSTART:19701025T030000', 'TZOFFSETFROM:+0200', 'TZOFFSETTO:+0100', 'END:STANDARD', 'END:VTIMEZONE',
+    'BEGIN:VEVENT', 'UID:a@x', 'DTSTART;TZID=Europe/Paris:20261001T090000', 'SUMMARY:Standup', 'RRULE:FREQ=DAILY', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:a@x', 'RECURRENCE-ID;TZID=Europe/Paris:20261002T090000', 'DTSTART;TZID=Europe/Paris:20261002T100000', 'SUMMARY:Standup (late)', 'END:VEVENT',
+    'BEGIN:VEVENT', 'DTSTART;VALUE=DATE:20261005', 'SUMMARY:No UID', 'BEGIN:VALARM', 'ACTION:DISPLAY', 'END:VALARM', 'END:VEVENT',
+    'END:VCALENDAR', ''].join('\r\n');
+  const r = await (await api('POST', '/import?type=calendar&name=Work%20Import', ics, { 'Content-Type': 'text/calendar' })).json();
+  assert.equal(r.imported, 2);
+  assert.equal(r.target, 'work-import');
+  const standup = await (await dav('GET', '/dav/calendars/alice/work-import/a_x.ics')).text();
+  assert.match(standup, /BEGIN:VTIMEZONE/);
+  assert.equal(standup.match(/BEGIN:VEVENT/g).length, 2);
+  const { events } = await (await api('GET', '/events')).json();
+  assert.ok(events.some((e) => e.title === 'No UID' && e.start === '2026-10-05'));
+});
+
+test('import: vcf splitting and calendar links refuse private addresses', async () => {
+  const vcf = 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:One\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:3.0\r\nFN:Two\r\nUID:two\r\nEND:VCARD\r\n';
+  assert.equal((await (await api('POST', '/import?type=contacts', vcf)).json()).imported, 2);
+  const { contacts } = await (await api('GET', '/contacts')).json();
+  assert.ok(['One', 'Two'].every((n) => contacts.some((c) => c.name === n)));
+  for (const u of [`${base}/api/me`, 'http://169.254.169.254/latest/meta-data', 'file:///etc/passwd']) {
+    const r = await api('POST', '/import?type=calendar&url=' + encodeURIComponent(u));
+    assert.equal(r.status, 400, u);
+  }
+});
+
+test('X-OC-Mtime preserves the original file date', async () => {
+  const when = 1500000000; // 2017-07-14
+  const put = await dav('PUT', '/dav/files/alice/Photos/old.jpg', 'x', { 'X-OC-Mtime': String(when) });
+  assert.equal(put.headers.get('x-oc-mtime'), 'accepted');
+  const { photos } = await (await api('GET', '/photos')).json();
+  assert.equal(photos.find((p) => p.name === 'old.jpg').mtime, when * 1000);
+});
+
+test('one-tap device profile carries both accounts and is single-use', async () => {
+  const { url } = await (await api('POST', '/profile', { label: 'Test iPhone' })).json();
+  const r = await api('GET', url.replace(/^\/api/, ''));
+  assert.equal(r.headers.get('content-type'), 'application/x-apple-aspen-config');
+  const xml = await r.text();
+  assert.match(xml, /com\.apple\.caldav\.account/);
+  assert.match(xml, /com\.apple\.carddav\.account/);
+  const password = /CalDAVPassword<\/key><string>([^<]+)</.exec(xml)[1];
+  const basicAp = 'Basic ' + Buffer.from(`alice:${password}`).toString('base64');
+  assert.equal((await fetch(base + '/dav/principals/alice/', { method: 'PROPFIND', headers: { Authorization: basicAp, Depth: '0' } })).status, 207);
+  assert.equal((await api('GET', url.replace(/^\/api/, ''))).status, 404);
 });

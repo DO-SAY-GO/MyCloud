@@ -64,6 +64,8 @@ function ask({ title, text, fields = [], submit = 'OK', danger = false, extra })
     extra ?? null,
     ...fields.map((f) => f.type === 'checkbox'
       ? h('label', { class: 'row' }, h('input', { type: 'checkbox', name: f.name, checked: !!f.value, style: { width: 'auto' } }), f.label)
+      : f.type === 'file'
+        ? h('label', {}, f.label, h('input', { type: 'file', name: f.name, accept: f.accept || '', required: !!f.required }))
       : f.type === 'select'
         ? h('label', {}, f.label, h('select', { name: f.name }, f.options.map(([v, l]) => h('option', { value: v, selected: v === f.value }, l))))
         : f.type === 'textarea'
@@ -82,7 +84,7 @@ function ask({ title, text, fields = [], submit = 'OK', danger = false, extra })
       const out = {};
       for (const f of fields) {
         const input = form.elements[f.name];
-        out[f.name] = f.type === 'checkbox' ? input.checked : input.value.trim();
+        out[f.name] = f.type === 'checkbox' ? input.checked : f.type === 'file' ? input.files[0] ?? null : input.value.trim();
       }
       resolve(out);
     }, { once: true });
@@ -154,17 +156,17 @@ async function driveView(view, pathParts) {
     const full = joinPath(cwd, it.name);
     const open = () => (it.dir ? go(full) : window.open(rawUrl(full), '_blank'));
     return h('tr', {},
-      h('td', { class: 'name', onclick: open }, `${it.dir ? '📁' : fileIcon(it.name)}  ${it.name}`),
+      h('td', { class: 'name', onclick: open }, `${it.shared ? '👨‍👩‍👧' : it.dir ? '📁' : fileIcon(it.name)}  ${it.name}`, it.shared ? h('small', { class: 'muted' }, '  shared with your family') : null),
       h('td', { class: 'meta hide-sm' }, it.dir ? '—' : fmtSize(it.size)),
       h('td', { class: 'meta hide-sm' }, fmtDate(it.mtime)),
       h('td', { class: 'actions' },
         it.dir ? null : h('button', { class: 'icon', title: 'Download', onclick: () => { location.href = rawUrl(full, { download: 1 }); } }, '⬇️'),
         h('button', { class: 'icon', title: 'Share link', onclick: () => shareItem(full) }, '🔗'),
-        h('button', { class: 'icon', title: 'Rename', onclick: async () => {
+        it.shared ? null : h('button', { class: 'icon', title: 'Rename', onclick: async () => {
           const r = await ask({ title: 'Rename', fields: [{ name: 'name', label: 'Name', value: it.name, required: true }], submit: 'Rename' });
           if (r && r.name !== it.name) await api('POST', '/files/move', { from: full, to: joinPath(cwd, r.name) }).then(refresh, fail);
         } }, '✏️'),
-        h('button', { class: 'icon', title: 'Delete', onclick: async () => {
+        it.shared ? null : h('button', { class: 'icon', title: 'Delete', onclick: async () => {
           if (await ask({ title: `Delete “${it.name}”?`, text: it.dir ? 'The folder and everything in it will be deleted.' : 'This cannot be undone.', submit: 'Delete', danger: true })) {
             await api('DELETE', '/files' + qs({ path: full })).then(refresh, fail);
           }
@@ -211,10 +213,10 @@ async function shareItem(path) {
 // ---------------------------------------------------------------- Photos
 async function photosView(view) {
   const { photos } = await api('GET', '/photos');
-  const upload = async (files) => {
+  const upload = async (files, root = 'Photos') => {
     const now = new Date();
     const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    await uploadAll(files, () => `Photos/${month}`).catch(fail);
+    await uploadAll(files, () => `${root}/${month}`).catch(fail);
     route();
   };
   const grid = h('div', { class: 'grid' });
@@ -223,12 +225,14 @@ async function photosView(view) {
     const month = new Date(p.mtime).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
     if (month !== lastMonth) { grid.append(h('div', { class: 'month-label' }, month)); lastMonth = month; }
     const img = h('img', { src: thumbUrl(p.path), loading: 'lazy', alt: p.name, onerror: () => img.replaceWith(h('div', { class: 'empty' }, p.video ? '🎬' : '🖼️')) });
-    grid.append(h('button', { class: 'tile', onclick: () => lightbox(photos, i) }, img, p.video ? h('span', { class: 'badge' }, '▶︎') : null));
+    const badge = [p.video ? '▶︎' : '', p.path.startsWith('Family/') ? '👨‍👩‍👧' : ''].join(' ').trim();
+    grid.append(h('button', { class: 'tile', onclick: () => lightbox(photos, i) }, img, badge ? h('span', { class: 'badge' }, badge) : null));
   });
   const body = photos.length ? grid : h('div', { class: 'card empty' }, 'No photos yet. Upload some, or point your phone’s backup app at the Photos folder.');
   enableDrop(view, upload);
   fill(view, 
     h('div', { class: 'view-head' }, h('h2', {}, 'Photos'), h('span', { class: 'muted' }, `${photos.length} items`),
+      h('button', { title: 'Everyone in your family sees these', onclick: async () => upload(await pickFiles('image/*,video/*'), 'Family/Photos') }, 'Share with family'),
       h('button', { class: 'primary', onclick: async () => upload(await pickFiles('image/*,video/*')) }, 'Upload')),
     body);
 }
@@ -400,8 +404,33 @@ async function calendarView(view) {
       h('button', { onclick: () => shift(-1) }, '‹'),
       h('button', { onclick: () => { calState.month = new Date(new Date().getFullYear(), new Date().getMonth(), 1); route(); } }, 'Today'),
       h('button', { onclick: () => shift(1) }, '›'),
+      h('button', { onclick: () => importCalendar(calendars) }, 'Import'),
       h('button', { class: 'primary', onclick: () => addEvent(ymd(new Date()), calendars) }, 'New event')),
     cal);
+}
+
+async function importInto(type, params, body) {
+  const res = await fetch('/api/import' + qs({ type, ...params }), { method: 'POST', headers: { 'X-MyCloud': '1' }, body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'import failed');
+  toast(`Imported ${data.imported} ${type === 'calendar' ? 'event' : 'contact'}${data.imported === 1 ? '' : 's'}`);
+  route();
+}
+
+async function importCalendar(calendars) {
+  const r = await ask({
+    title: 'Import a calendar', submit: 'Import',
+    text: 'Choose an .ics file exported from iCloud.com, Google or Outlook — or paste a calendar link, like the webcal:// link from a shared iCloud calendar.',
+    fields: [
+      { name: 'file', label: '.ics file', type: 'file', accept: '.ics,text/calendar' },
+      { name: 'url', label: 'or a calendar link', placeholder: 'webcal://…' },
+      { name: 'target', label: 'Into', type: 'select', value: '', options: [['', 'A new calendar'], ...calendars.map((c) => [c.id, c.name])] },
+    ],
+  });
+  if (!r) return;
+  if (!r.file && !r.url) return toast('Choose a file or paste a link');
+  const name = r.file ? r.file.name.replace(/\.ics$/i, '') : 'Imported calendar';
+  await importInto('calendar', { target: r.target, name, ...(r.url && !r.file && { url: r.url }) }, r.file ?? undefined).catch(fail);
 }
 
 async function addEvent(date, calendars) {
@@ -486,7 +515,12 @@ async function contactsView(view) {
         if (!r) return;
         await api('POST', '/contacts', { name: r.name, emails: [r.email], phones: [r.phone], org: r.org, note: r.note })
           .then(({ file }) => { contactState.selected = file; route(); }, fail);
-      } }, 'New contact')),
+      } }, 'New contact'),
+      h('button', { onclick: async () => {
+        const r = await ask({ title: 'Import contacts', submit: 'Import', text: 'Choose a .vcf file — e.g. from iCloud.com › Contacts › select all › Export vCard, or Google Contacts › Export.',
+          fields: [{ name: 'file', label: '.vcf file', type: 'file', accept: '.vcf,text/vcard', required: true }] });
+        if (r?.file) await importInto('contacts', {}, r.file).catch(fail);
+      } }, 'Import')),
     h('div', { class: 'contacts' }, h('div', { style: { display: 'grid', gap: '8px', alignContent: 'start' } }, search, list), detail));
   renderList();
   renderDetail();
@@ -494,43 +528,107 @@ async function contactsView(view) {
 
 // ---------------------------------------------------------------- Settings
 async function settingsView(view) {
-  const [{ appPasswords }, { shares }] = await Promise.all([api('GET', '/app-passwords'), api('GET', '/shares')]);
-  const dav = `${me.origin}/dav/`;
+  const [{ appPasswords }, { shares }, family] = await Promise.all([api('GET', '/app-passwords'), api('GET', '/shares'), api('GET', '/family')]);
   const secureOrigin = me.origin.startsWith('https:');
+  const cli = (sub) => `npx github:DO-SAY-GO/MyCloud import ${sub} --server ${me.origin} --user ${me.user}`;
 
-  fill(view, 
+  const shareLink = async (title, text, path) => {
+    const url = location.origin + path;
+    const actions = h('div', { class: 'row' },
+      navigator.share ? h('button', { type: 'button', class: 'primary', onclick: () => navigator.share({ title, text, url }).catch(() => {}) }, 'Send…') : null,
+      h('button', { type: 'button', onclick: () => navigator.clipboard.writeText(url).then(() => toast('Link copied')) }, 'Copy link'));
+    await ask({ title, text, extra: [h('div', { class: 'secret small' }, url), actions], submit: null });
+  };
+
+  const setUpDevice = h('div', { class: 'card hero' },
+    h('h3', {}, 'Set up this iPhone, iPad or Mac'),
+    h('p', { class: 'muted' }, 'One tap adds your MyCloud calendars and contacts to the built-in apps. No app to install, and no server addresses to type.'),
+    !secureOrigin ? h('p', { class: 'error' }, 'This server isn’t on HTTPS yet. Put it behind Tailscale or Caddy before using it away from home.') : null,
+    h('div', { class: 'row' },
+      h('button', { class: 'primary big', onclick: async () => {
+        const r = await ask({ title: 'Name this device', fields: [{ name: 'label', label: 'Device', value: /iPhone/.test(navigator.userAgent) ? 'iPhone' : /iPad/.test(navigator.userAgent) ? 'iPad' : 'Mac', required: true }], submit: 'Download profile' });
+        if (!r) return;
+        try {
+          const { url } = await api('POST', '/profile', { label: r.label });
+          location.href = url;
+          await ask({ title: 'Almost there', submit: null, extra: h('ol', { class: 'steps' },
+            h('li', {}, 'Tap Allow if asked to download a configuration profile.'),
+            h('li', {}, 'iPhone/iPad: open Settings › Profile Downloaded › Install. Mac: System Settings › Privacy & Security › Profiles.'),
+            h('li', {}, 'Open Calendar and Contacts — your MyCloud accounts are there.')) });
+          route();
+        } catch (e) { fail(e); }
+      } }, 'Add MyCloud to this device')),
+    h('details', {},
+      h('summary', {}, 'Other devices and manual setup'),
+      h('dl', {},
+        h('dt', {}, 'Server'), h('dd', {}, me.origin.replace(/^https?:\/\//, '')),
+        h('dt', {}, 'Username'), h('dd', {}, me.user),
+        h('dt', {}, 'CalDAV / CardDAV'), h('dd', {}, `${me.origin}/dav/`),
+        h('dt', {}, 'Files (WebDAV)'), h('dd', {}, `${me.origin}/dav/files/${encodeURIComponent(me.user)}/`)),
+      h('ul', { class: 'muted' },
+        h('li', {}, 'Android: DAVx⁵ with the CalDAV/CardDAV URL and an app password.'),
+        h('li', {}, 'Finder: Go › Connect to Server (⌘K) and paste the Files URL.'),
+        h('li', {}, 'Photo backup: any WebDAV backup app (e.g. PhotoSync) pointed at Photos/.'))));
+
+  const bringStuff = h('div', { class: 'card' },
+    h('h3', {}, 'Bring your stuff'),
+    h('p', { class: 'muted' }, 'On your Mac, paste this into Terminal. It copies your Contacts, Calendars, Notes, Photos and iCloud Drive into MyCloud. It’s safe to run again, and it picks up where it left off.'),
+    h('div', { class: 'code' }, h('code', {}, cli('mac')), h('button', { class: 'icon', title: 'Copy', onclick: () => navigator.clipboard.writeText(cli('mac')).then(() => toast('Copied')) }, '⧉')),
+    h('p', { class: 'muted' }, 'Photos straight from an iPhone over USB (plug it in, unlock it, tap Trust):'),
+    h('div', { class: 'code' }, h('code', {}, cli('iphone')), h('button', { class: 'icon', title: 'Copy', onclick: () => navigator.clipboard.writeText(cli('iphone')).then(() => toast('Copied')) }, '⧉')),
+    h('p', { class: 'muted' }, 'No Mac? Import .ics and .vcf files from the Calendar and Contacts pages.'));
+
+  const familyCard = h('div', { class: 'card' },
+    h('div', { class: 'row' }, h('h3', { style: { marginRight: 'auto' } }, 'Family'),
+      family.admin ? h('button', { class: 'primary', onclick: async () => {
+        try {
+          const { url } = await api('POST', '/family/invites', { kind: 'join' });
+          await shareLink('Invite to MyCloud', 'Join our family cloud: photos, calendar and files that we own.', url);
+          route();
+        } catch (e) { fail(e); }
+      } }, 'Invite someone') : null),
+    h('p', { class: 'muted' }, 'Everyone here shares the Family folder, the Family photo album and the Family calendar. Everything else stays private to each person.'),
+    family.members.map((m) => h('div', { class: 'list-row' },
+      h('span', { class: 'row' }, h('span', { class: 'avatar' }, initials(m.name)), m.name, m.admin ? h('small', { class: 'pill' }, 'admin') : null, m.name === me.user ? h('small', { class: 'muted' }, '(you)') : null),
+      family.admin && m.name !== me.user ? h('span', { class: 'row' },
+        h('button', { onclick: async () => {
+          try {
+            const { url } = await api('POST', '/family/invites', { kind: 'reset', username: m.name });
+            await shareLink(`Password reset for ${m.name}`, `Send this to ${m.name}. It works once, for 24 hours.`, url);
+          } catch (e) { fail(e); }
+        } }, 'Reset password'),
+        h('button', { class: 'danger', onclick: async () => {
+          if (await ask({ title: `Remove ${m.name}?`, text: 'They lose access right away. Their files are kept on the server (in removed/) until you delete them.', submit: 'Remove', danger: true })) {
+            await api('DELETE', '/family/members' + qs({ name: m.name })).then(() => route(), fail);
+          }
+        } }, 'Remove')) : null)),
+    family.invites.filter((i) => i.kind === 'join').map((i) => h('div', { class: 'list-row' },
+      h('span', { class: 'muted' }, `Invite link · expires ${fmtDate(i.expires)}`),
+      h('button', { class: 'danger', onclick: () => api('DELETE', '/family/invites' + qs({ id: i.id })).then(() => route(), fail) }, 'Revoke'))));
+
+  fill(view,
     h('div', { class: 'view-head' }, h('h2', {}, 'Settings')),
     h('div', { class: 'settings' },
-      h('div', { class: 'card' },
-        h('h3', {}, 'Connect your devices'),
-        h('p', { class: 'muted' }, 'MyCloud speaks the same open protocols as iCloud, so the built-in apps on iPhone, iPad, Mac, Android (DAVx⁵) and Thunderbird sync natively. Use an app password below instead of your main password.'),
-        !secureOrigin ? h('p', { class: 'error' }, 'This server is not on HTTPS. Put it behind Caddy or Tailscale before connecting phones over the internet.') : null,
-        h('dl', {},
-          h('dt', {}, 'Server'), h('dd', {}, me.origin.replace(/^https?:\/\//, '')),
-          h('dt', {}, 'Username'), h('dd', {}, me.user),
-          h('dt', {}, 'CalDAV / CardDAV'), h('dd', {}, dav),
-          h('dt', {}, 'Files (WebDAV)'), h('dd', {}, `${me.origin}/dav/files/${encodeURIComponent(me.user)}/`)),
-        h('ul', { class: 'muted' },
-          h('li', {}, 'iPhone/iPad: Settings › Apps › Calendar (or Contacts) › Calendar Accounts › Add Account › Other › Add CalDAV / CardDAV Account.'),
-          h('li', {}, 'Mac: System Settings › Internet Accounts › Add Other Account › CalDAV / CardDAV (account type: Manual).'),
-          h('li', {}, 'Finder: Go › Connect to Server (⌘K) and paste the Files URL.'),
-          h('li', {}, 'Photo backup: any WebDAV backup app (e.g. PhotoSync) or an iOS Shortcuts automation that uploads to the Photos folder.'))),
+      setUpDevice,
+      familyCard,
+      bringStuff,
 
       h('div', { class: 'card' },
         h('div', { class: 'row' }, h('h3', { style: { marginRight: 'auto' } }, 'App passwords'),
-          h('button', { class: 'primary', onclick: async () => {
-            const r = await ask({ title: 'New app password', fields: [{ name: 'label', label: 'Device name', placeholder: 'e.g. iPhone', required: true }], submit: 'Create' });
+          h('button', { onclick: async () => {
+            const r = await ask({ title: 'New app password', fields: [{ name: 'label', label: 'Device name', placeholder: 'e.g. Thunderbird', required: true }], submit: 'Create' });
             if (!r) return;
             try {
               const { password } = await api('POST', '/app-passwords', { label: r.label });
-              await ask({ title: `App password for ${r.label}`, text: 'Enter this as the password on your device. It will not be shown again.', extra: h('div', { class: 'secret' }, password), submit: null });
+              await ask({ title: `App password for ${r.label}`, text: 'Enter this as the password on your device. It won’t be shown again.', extra: h('div', { class: 'secret' }, password), submit: null });
               route();
             } catch (e) { fail(e); }
           } }, 'Create')),
+        h('p', { class: 'muted' }, 'Each device gets its own password, which you can revoke at any time. Profiles created above show up here too.'),
         appPasswords.length ? appPasswords.map((a) => h('div', { class: 'list-row' },
           h('span', {}, a.label, h('br'), h('small', { class: 'muted' }, `created ${fmtDate(a.created)}${a.lastUsed ? ` · last used ${fmtDate(a.lastUsed)}` : ' · never used'}`)),
           h('button', { class: 'danger', onclick: () => api('DELETE', '/app-passwords' + qs({ id: a.id })).then(() => route(), fail) }, 'Revoke')))
-          : h('p', { class: 'muted' }, 'None yet.')),
+          : null),
 
       h('div', { class: 'card' },
         h('h3', {}, 'Share links'),
@@ -578,7 +676,42 @@ function showLogin() {
   $('#login-form').username.focus();
 }
 
+async function showJoin(token) {
+  $('#login').hidden = true;
+  const form = $('#join-form');
+  $('#join').hidden = false;
+  let inv;
+  try {
+    const res = await fetch('/api/join' + qs({ token }));
+    inv = await res.json();
+    if (!res.ok) throw new Error(inv.error);
+  } catch (e) {
+    fill(form, h('img', { src: 'icon.svg', alt: '', class: 'login-logo' }), h('h1', {}, 'Link expired'), h('p', { class: 'muted' }, e.message || 'Ask for a new invite.'), h('a', { href: '/' }, 'Go to sign in'));
+    return;
+  }
+  const reset = inv.kind === 'reset';
+  $('#join-title').textContent = reset ? `New password for ${inv.username}` : 'You’re invited';
+  $('#join-sub').textContent = reset ? 'Choose a new password.' : `${inv.by} invited you to your family’s MyCloud: private photos, files, calendar and contacts, on hardware you own.`;
+  form.username.hidden = reset;
+  form.username.required = !reset;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    $('#join-error').textContent = '';
+    if (form.password.value !== form.repeat.value) return ($('#join-error').textContent = 'Passwords don’t match');
+    try {
+      await api('POST', '/join', { token, username: form.username.value, password: form.password.value });
+      history.replaceState(null, '', '/#settings');
+      $('#join').hidden = true;
+      await start();
+      toast(reset ? 'Password updated' : 'Welcome to the family! Add MyCloud to your phone below.');
+    } catch (err) {
+      $('#join-error').textContent = err.message;
+    }
+  };
+}
+
 async function start() {
+  if (location.pathname.startsWith('/join/')) return showJoin(location.pathname.slice(6));
   try {
     me = await api('GET', '/me');
   } catch {

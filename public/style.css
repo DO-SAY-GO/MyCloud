@@ -59,7 +59,7 @@ button:disabled { opacity: .5; cursor: default; }
   .app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
   .sidebar { order: 2; flex-direction: row; justify-content: space-around; border-right: 0; border-top: 1px solid var(--line); padding: 6px; }
   .sidebar a { flex-direction: column; gap: 0; font-size: 11px; padding: 6px; }
-  .sidebar a span { font-size: 20px; }
+  .sidebar a .app-icon { width: 30px; height: 30px; }
   .brand, .sidebar-foot { display: none; }
   .view { padding: 20px 16px; }
   .view-head h2 { flex-basis: 100%; }
@@ -152,3 +152,51 @@ dialog label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 dialog .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0; background: #1d1d1f; color: #fff; padding: 10px 16px; border-radius: 10px; transition: .2s; pointer-events: none; z-index: 30; max-width: calc(100% - 32px); }
 .toast.show { opacity: 1; transform: translateX(-50%); }
+
+/* ---- polish ---- */
+.app-icon { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex: none; box-shadow: inset 0 0 0 .5px rgb(0 0 0 / .08); }
+.app-icon svg { width: 62%; height: 62%; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.i-drive { background: linear-gradient(#5ac8fa, #0a84ff); }
+.i-photos { background: #fff; }
+.i-photos svg { stroke: none; }
+.i-photos circle:nth-child(1) { fill: #ff9f0a; } .i-photos circle:nth-child(2) { fill: #34c759; }
+.i-photos circle:nth-child(3) { fill: #0a84ff; } .i-photos circle:nth-child(4) { fill: #ff375f; }
+.i-photos circle { mix-blend-mode: multiply; opacity: .9; }
+.i-notes { background: linear-gradient(#ffd60a, #ffb800); }
+.i-calendar { background: linear-gradient(#ff6b6b, #ff3b30); }
+.i-contacts { background: linear-gradient(#b0b0b8, #8e8e93); }
+.i-settings { background: linear-gradient(#8e8e93, #636366); }
+.sidebar a { transition: background .15s; }
+.sidebar a.active { background: var(--hover); color: var(--text); }
+
+.login {
+  background:
+    radial-gradient(900px 520px at 15% -10%, #bfe3ff 0%, transparent 60%),
+    radial-gradient(800px 520px at 110% 105%, #ffd9ec 0%, transparent 60%),
+    radial-gradient(700px 400px at 90% 0%, #e3f7e8 0%, transparent 60%),
+    var(--bg);
+}
+@media (prefers-color-scheme: dark) {
+  .login {
+    background:
+      radial-gradient(900px 520px at 15% -10%, #0b3a66 0%, transparent 60%),
+      radial-gradient(800px 520px at 110% 105%, #4a1238 0%, transparent 60%),
+      var(--bg);
+  }
+}
+.login-card { background: color-mix(in srgb, var(--panel) 78%, transparent); backdrop-filter: blur(24px) saturate(1.6); -webkit-backdrop-filter: blur(24px) saturate(1.6); border: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.login-card h1 { font-size: 30px; }
+.login-logo { width: 84px; filter: drop-shadow(0 8px 18px rgb(10 132 255 / .35)); }
+
+.card.hero { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, var(--panel)), var(--panel) 60%); }
+button.big { padding: 12px 20px; font-size: 16px; border-radius: 12px; }
+details { margin-top: 14px; }
+summary { cursor: pointer; color: var(--accent); }
+.code { display: flex; align-items: center; gap: 8px; background: var(--hover); border-radius: 10px; padding: 10px 12px; margin: 4px 0 14px; }
+.code code { flex: 1; font: 13px/1.5 ui-monospace, Menlo, monospace; word-break: break-all; }
+.secret.small { font-size: 13px; letter-spacing: 0; word-break: break-all; }
+.pill { background: var(--accent-soft); color: var(--accent); border-radius: 99px; padding: 1px 8px; font-size: 11px; font-weight: 600; }
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+.list-row .row { gap: 10px; }
+.list-row .avatar { width: 30px; height: 30px; font-size: 13px; }
+@media (max-width: 760px) { .toast { bottom: 92px; } }

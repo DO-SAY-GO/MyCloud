@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>MyCloud</title>
-  <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="style.css">
-  <script type="module" src="app.js"></script>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
 </head>
 <body>
   <main id="login" class="login" hidden>
     <form id="login-form" class="login-card">
-      <img src="icon.svg" alt="" class="login-logo">
+      <img src="/icon.svg" alt="" class="login-logo">
       <h1>MyCloud</h1>
       <p class="muted">Your cloud. Your hardware.</p>
       <input name="username" autocomplete="username" placeholder="Username" required autocapitalize="off">
@@ -23,15 +23,28 @@
     </form>
   </main>
 
+  <main id="join" class="login" hidden>
+    <form id="join-form" class="login-card">
+      <img src="/icon.svg" alt="" class="login-logo">
+      <h1 id="join-title">You’re invited</h1>
+      <p id="join-sub" class="muted"></p>
+      <input name="username" autocomplete="username" placeholder="Pick a username" autocapitalize="off" pattern="[a-z0-9][a-z0-9._\-]{0,31}" title="lowercase letters, digits, . _ -">
+      <input name="password" type="password" autocomplete="new-password" placeholder="Password (8+ characters)" minlength="8" required>
+      <input name="repeat" type="password" autocomplete="new-password" placeholder="Repeat password" required>
+      <button class="primary">Continue</button>
+      <p id="join-error" class="error" role="alert"></p>
+    </form>
+  </main>
+
   <div id="app" class="app" hidden>
     <nav class="sidebar">
-      <div class="brand"><img src="icon.svg" alt=""> MyCloud</div>
-      <a href="#drive" data-view="drive"><span>🗂️</span> Drive</a>
-      <a href="#photos" data-view="photos"><span>🌄</span> Photos</a>
-      <a href="#notes" data-view="notes"><span>📝</span> Notes</a>
-      <a href="#calendar" data-view="calendar"><span>📅</span> Calendar</a>
-      <a href="#contacts" data-view="contacts"><span>👤</span> Contacts</a>
-      <a href="#settings" data-view="settings"><span>⚙️</span> Settings</a>
+      <div class="brand"><img src="/icon.svg" alt=""> MyCloud</div>
+      <a href="#drive" data-view="drive"><span class="app-icon i-drive"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"/></svg></span> Drive</a>
+      <a href="#photos" data-view="photos"><span class="app-icon i-photos"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3"/><circle cx="17" cy="12" r="3"/><circle cx="12" cy="17" r="3"/><circle cx="7" cy="12" r="3"/></svg></span> Photos</a>
+      <a href="#notes" data-view="notes"><span class="app-icon i-notes"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3.5" width="14" height="17" rx="2.5"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg></span> Notes</a>
+      <a href="#calendar" data-view="calendar"><span class="app-icon i-calendar"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg></span> Calendar</a>
+      <a href="#contacts" data-view="contacts"><span class="app-icon i-contacts"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></span> Contacts</a>
+      <a href="#settings" data-view="settings"><span class="app-icon i-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3"/></svg></span> Settings</a>
       <div class="sidebar-foot muted" id="whoami"></div>
     </nav>
     <section id="view" class="view"></section>
